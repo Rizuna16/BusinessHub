@@ -13,12 +13,15 @@ async def http_exception_handler(request: Request, exc: StarletteHTTPException) 
         str(exc.detail),
         {"status_code": exc.status_code, "path": str(request.url)},
     )
+    # Check if detail is already a dict or str
+    detail = exc.detail
+    message = detail if isinstance(detail, str) else str(detail)
     return JSONResponse(
         status_code=exc.status_code,
         content=create_api_response(
             success=False,
-            message=str(exc.detail),
-            errors=[str(exc.detail)] if exc.detail else None,
+            message=message,
+            errors=[message] if message else None,
         ),
     )
 

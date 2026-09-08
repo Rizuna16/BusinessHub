@@ -1,0 +1,1 @@
+# Sales Receivable module init
