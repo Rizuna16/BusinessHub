@@ -23,6 +23,7 @@ from app.modules.payment.repository import InMemoryPaymentRepository
 from app.modules.cash_account.repository import InMemoryCashAccountRepository
 from app.modules.warehouse.repository import InMemoryWarehouseRepository, InMemoryInventoryLocationRepository
 from app.modules.inventory.repository import InMemoryStockBalanceRepository, InMemoryStockMovementRepository, InMemoryInventoryCostRepository
+from app.modules.cashier_shift.repository import InMemoryCashierShiftRepository
 
 client = TestClient(app)
 
@@ -54,6 +55,7 @@ def clear_repositories():
     InMemoryBusinessRepository.clear()
     InMemoryAccountRepository.clear()
     InMemoryUserRepository.clear()
+    InMemoryCashierShiftRepository.clear()
     yield
     InMemorySalesReturnRepository.clear()
     InMemorySalesPaymentRepository.clear()
@@ -76,6 +78,7 @@ def clear_repositories():
     InMemoryBusinessRepository.clear()
     InMemoryAccountRepository.clear()
     InMemoryUserRepository.clear()
+    InMemoryCashierShiftRepository.clear()
 
 
 def register_user(email="owner@example.com", name="Owner Test"):

@@ -30,6 +30,7 @@ from app.modules.business_membership.service import (
     business_membership_service,
 )
 from app.modules.business_membership.schemas import BusinessMembershipRole
+from app.modules.cashier_shift.service import cashier_shift_service
 
 
 class CashAccountService:
@@ -265,6 +266,7 @@ class CashAccountService:
             reference_type=payload.reference_type,
             reference_id=payload.reference_id,
             description=payload.description,
+            shift_id=payload.shift_id,
         )
 
         return CashMovementResponse(**movement.model_dump())
@@ -319,6 +321,18 @@ class CashAccountService:
         import uuid
         transfer_ref_id = str(uuid.uuid4())
 
+        # Resolve shift context for each side independently
+        source_shift_id = None
+        dest_shift_id = None
+        if source.account_type == CashAccountType.CASH:
+            shift = await cashier_shift_service.shift_repo.get_open_shift(business_id, source.id)
+            if shift:
+                source_shift_id = shift.id
+        if dest.account_type == CashAccountType.CASH:
+            shift = await cashier_shift_service.shift_repo.get_open_shift(business_id, dest.id)
+            if shift:
+                dest_shift_id = shift.id
+
         # Atomic logical transfer: 1. TRANSFER_OUT, 2. TRANSFER_IN
         m_out = await self.account_repo.create_movement(
             business_id=business_id,
@@ -330,6 +344,7 @@ class CashAccountService:
             reference_type="CASH_TRANSFER",
             reference_id=transfer_ref_id,
             description=payload.description or f"Transfer OUT to {dest.name}",
+            shift_id=source_shift_id,
         )
 
         m_in = await self.account_repo.create_movement(
@@ -342,6 +357,7 @@ class CashAccountService:
             reference_type="CASH_TRANSFER",
             reference_id=transfer_ref_id,
             description=payload.description or f"Transfer IN from {source.name}",
+            shift_id=dest_shift_id,
         )
 
         return [CashMovementResponse(**m_out.model_dump()), CashMovementResponse(**m_in.model_dump())]

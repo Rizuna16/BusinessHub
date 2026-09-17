@@ -1,4 +1,5 @@
 from typing import Optional
+from datetime import datetime
 from fastapi import APIRouter, Depends, Path, Query, status
 
 from app.core.config import settings
@@ -10,6 +11,10 @@ from app.modules.payment.schemas import (
     PaymentListResponse,
     PaymentDirection,
     PaymentTargetType,
+    PaymentMethod,
+    PaymentAnalyticsSummaryResponse,
+    PaymentAnalyticsByDirectionResponse,
+    PaymentAnalyticsByMethodResponse,
 )
 from app.modules.payment.service import (
     PaymentService,
@@ -72,3 +77,59 @@ async def void_payment(
     service: PaymentService = Depends(get_payment_service),
 ):
     return await service.void_payment(business_id=business_id, payment_id=payment_id, user_id=current_user.id)
+
+
+# --- Payment Analytics ---
+
+@router.get("/analytics/summary", response_model=PaymentAnalyticsSummaryResponse, status_code=status.HTTP_200_OK)
+async def get_payment_analytics_summary(
+    business_id: str = Path(...),
+    date_from: datetime = Query(...),
+    date_to: datetime = Query(...),
+    branch_id: Optional[str] = Query(None),
+    direction: Optional[PaymentDirection] = Query(None),
+    payment_method: Optional[PaymentMethod] = Query(None),
+    current_user: UserResponse = Depends(get_current_user),
+    service: PaymentService = Depends(get_payment_service),
+):
+    return await service.get_payment_analytics_summary(
+        business_id=business_id, user_id=current_user.id,
+        date_from=date_from, date_to=date_to,
+        branch_id=branch_id, direction=direction, payment_method=payment_method,
+    )
+
+
+@router.get("/analytics/by-direction", response_model=PaymentAnalyticsByDirectionResponse, status_code=status.HTTP_200_OK)
+async def get_payment_analytics_by_direction(
+    business_id: str = Path(...),
+    date_from: datetime = Query(...),
+    date_to: datetime = Query(...),
+    branch_id: Optional[str] = Query(None),
+    direction: Optional[PaymentDirection] = Query(None),
+    payment_method: Optional[PaymentMethod] = Query(None),
+    current_user: UserResponse = Depends(get_current_user),
+    service: PaymentService = Depends(get_payment_service),
+):
+    return await service.get_payment_analytics_by_direction(
+        business_id=business_id, user_id=current_user.id,
+        date_from=date_from, date_to=date_to,
+        branch_id=branch_id, direction=direction, payment_method=payment_method,
+    )
+
+
+@router.get("/analytics/by-method", response_model=PaymentAnalyticsByMethodResponse, status_code=status.HTTP_200_OK)
+async def get_payment_analytics_by_method(
+    business_id: str = Path(...),
+    date_from: datetime = Query(...),
+    date_to: datetime = Query(...),
+    branch_id: Optional[str] = Query(None),
+    direction: Optional[PaymentDirection] = Query(None),
+    payment_method: Optional[PaymentMethod] = Query(None),
+    current_user: UserResponse = Depends(get_current_user),
+    service: PaymentService = Depends(get_payment_service),
+):
+    return await service.get_payment_analytics_by_method(
+        business_id=business_id, user_id=current_user.id,
+        date_from=date_from, date_to=date_to,
+        branch_id=branch_id, direction=direction, payment_method=payment_method,
+    )

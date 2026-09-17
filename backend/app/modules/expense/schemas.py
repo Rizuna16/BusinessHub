@@ -198,3 +198,19 @@ class ExpenseSummaryResponse(BaseModel):
     finalized_count: int
     draft_count: int
     currency: str = "IDR"
+
+
+class CategoryBreakdownItem(BaseModel):
+    category_id: Optional[str] = None
+    category_code: str
+    category_name: str
+    total: Decimal
+    expense_count: int
+
+
+class ExpenseAnalyticsByCategoryResponse(BaseModel):
+    date_from: datetime
+    date_to: datetime
+    total: Decimal
+    expense_count: int
+    categories: List[CategoryBreakdownItem]

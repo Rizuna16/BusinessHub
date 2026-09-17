@@ -11,6 +11,7 @@ from app.modules.expense.schemas import (
     ExpenseCategoryResponse,
     ExpenseCategoryListResponse,
     ExpenseSummaryResponse,
+    ExpenseAnalyticsByCategoryResponse,
     ExpenseCreate,
     ExpenseUpdate,
     ExpenseCategoryCreate,
@@ -131,10 +132,37 @@ async def list_expenses(
 @router.get("/expenses/summary", response_model=ExpenseSummaryResponse, status_code=status.HTTP_200_OK)
 async def get_expense_summary(
     business_id: str = Path(...),
+    date_from: Optional[datetime] = Query(None),
+    date_to: Optional[datetime] = Query(None),
+    category_id: Optional[str] = Query(None),
     current_user: UserResponse = Depends(get_current_user),
     service: ExpenseService = Depends(get_expense_service),
 ):
-    return await service.get_summary(business_id=business_id, user_id=current_user.id)
+    return await service.get_summary(
+        business_id=business_id,
+        user_id=current_user.id,
+        date_from=date_from,
+        date_to=date_to,
+        category_id=category_id,
+    )
+
+
+@router.get("/expenses/analytics/by-category", response_model=ExpenseAnalyticsByCategoryResponse, status_code=status.HTTP_200_OK)
+async def get_expense_analytics_by_category(
+    business_id: str = Path(...),
+    date_from: datetime = Query(...),
+    date_to: datetime = Query(...),
+    category_id: Optional[str] = Query(None),
+    current_user: UserResponse = Depends(get_current_user),
+    service: ExpenseService = Depends(get_expense_service),
+):
+    return await service.get_analytics_by_category(
+        business_id=business_id,
+        user_id=current_user.id,
+        date_from=date_from,
+        date_to=date_to,
+        category_id=category_id,
+    )
 
 
 @router.get("/expenses/{expense_id}", response_model=ExpenseResponse, status_code=status.HTTP_200_OK)

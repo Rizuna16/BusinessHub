@@ -1093,6 +1093,54 @@ class ApiClient {
     );
   }
 
+  public async getPurchaseAnalyticsSummary(
+    businessId: string,
+    params: { date_from: string; date_to: string; supplier_id?: string; category_id?: string; branch_id?: string }
+  ): Promise<import('@/types/purchaseAnalytics').PurchaseAnalyticsSummaryResponse> {
+    const sp = new URLSearchParams();
+    sp.set('date_from', params.date_from);
+    sp.set('date_to', params.date_to);
+    if (params.supplier_id) sp.set('supplier_id', params.supplier_id);
+    if (params.category_id) sp.set('category_id', params.category_id);
+    if (params.branch_id) sp.set('branch_id', params.branch_id);
+    return this.request<import('@/types/purchaseAnalytics').PurchaseAnalyticsSummaryResponse>(
+      `/businesses/${businessId}/purchases/analytics/summary?${sp.toString()}`,
+      { method: 'GET' }
+    );
+  }
+
+  public async getPurchaseAnalyticsBySupplier(
+    businessId: string,
+    params: { date_from: string; date_to: string; supplier_id?: string; category_id?: string; branch_id?: string }
+  ): Promise<import('@/types/purchaseAnalytics').PurchaseAnalyticsBySupplierResponse> {
+    const sp = new URLSearchParams();
+    sp.set('date_from', params.date_from);
+    sp.set('date_to', params.date_to);
+    if (params.supplier_id) sp.set('supplier_id', params.supplier_id);
+    if (params.category_id) sp.set('category_id', params.category_id);
+    if (params.branch_id) sp.set('branch_id', params.branch_id);
+    return this.request<import('@/types/purchaseAnalytics').PurchaseAnalyticsBySupplierResponse>(
+      `/businesses/${businessId}/purchases/analytics/by-supplier?${sp.toString()}`,
+      { method: 'GET' }
+    );
+  }
+
+  public async getPurchaseAnalyticsByCategory(
+    businessId: string,
+    params: { date_from: string; date_to: string; supplier_id?: string; category_id?: string; branch_id?: string }
+  ): Promise<import('@/types/purchaseAnalytics').PurchaseAnalyticsByCategoryResponse> {
+    const sp = new URLSearchParams();
+    sp.set('date_from', params.date_from);
+    sp.set('date_to', params.date_to);
+    if (params.supplier_id) sp.set('supplier_id', params.supplier_id);
+    if (params.category_id) sp.set('category_id', params.category_id);
+    if (params.branch_id) sp.set('branch_id', params.branch_id);
+    return this.request<import('@/types/purchaseAnalytics').PurchaseAnalyticsByCategoryResponse>(
+      `/businesses/${businessId}/purchases/analytics/by-category?${sp.toString()}`,
+      { method: 'GET' }
+    );
+  }
+
   // ============================================================
   // Receiving
   // ============================================================
@@ -1490,6 +1538,54 @@ class ApiClient {
     });
   }
 
+  public async getSalesAnalyticsSummary(
+    businessId: string,
+    params: { date_from: string; date_to: string; category_id?: string; customer_id?: string; branch_id?: string }
+  ): Promise<import('@/types/salesAnalytics').SalesAnalyticsSummaryResponse> {
+    const searchParams = new URLSearchParams();
+    searchParams.set('date_from', params.date_from);
+    searchParams.set('date_to', params.date_to);
+    if (params.category_id) searchParams.set('category_id', params.category_id);
+    if (params.customer_id) searchParams.set('customer_id', params.customer_id);
+    if (params.branch_id) searchParams.set('branch_id', params.branch_id);
+    return this.request<import('@/types/salesAnalytics').SalesAnalyticsSummaryResponse>(
+      `/businesses/${businessId}/sales/analytics/summary?${searchParams.toString()}`,
+      { method: 'GET' }
+    );
+  }
+
+  public async getSalesAnalyticsByCategory(
+    businessId: string,
+    params: { date_from: string; date_to: string; category_id?: string; customer_id?: string; branch_id?: string }
+  ): Promise<import('@/types/salesAnalytics').SalesAnalyticsByCategoryResponse> {
+    const searchParams = new URLSearchParams();
+    searchParams.set('date_from', params.date_from);
+    searchParams.set('date_to', params.date_to);
+    if (params.category_id) searchParams.set('category_id', params.category_id);
+    if (params.customer_id) searchParams.set('customer_id', params.customer_id);
+    if (params.branch_id) searchParams.set('branch_id', params.branch_id);
+    return this.request<import('@/types/salesAnalytics').SalesAnalyticsByCategoryResponse>(
+      `/businesses/${businessId}/sales/analytics/by-category?${searchParams.toString()}`,
+      { method: 'GET' }
+    );
+  }
+
+  public async getSalesAnalyticsByCustomer(
+    businessId: string,
+    params: { date_from: string; date_to: string; category_id?: string; customer_id?: string; branch_id?: string }
+  ): Promise<import('@/types/salesAnalytics').SalesAnalyticsByCustomerResponse> {
+    const searchParams = new URLSearchParams();
+    searchParams.set('date_from', params.date_from);
+    searchParams.set('date_to', params.date_to);
+    if (params.category_id) searchParams.set('category_id', params.category_id);
+    if (params.customer_id) searchParams.set('customer_id', params.customer_id);
+    if (params.branch_id) searchParams.set('branch_id', params.branch_id);
+    return this.request<import('@/types/salesAnalytics').SalesAnalyticsByCustomerResponse>(
+      `/businesses/${businessId}/sales/analytics/by-customer?${searchParams.toString()}`,
+      { method: 'GET' }
+    );
+  }
+
   public async listSalesPayments(
     businessId: string,
     salesId: string,
@@ -1811,7 +1907,7 @@ class ApiClient {
 
   public async createPayment(
     businessId: string,
-    payload: { direction: string; target_type: string; target_id: string; amount: number | string; currency: string; payment_method: string; cash_account_id: string; reference_number?: string; notes?: string; idempotency_key?: string; payment_date?: string }
+    payload: { direction: string; target_type: string; target_id: string; amount: number | string; currency: string; payment_method: string; cash_account_id: string; reference_number?: string; notes?: string; idempotency_key?: string; payment_date?: string; shift_id?: string }
   ): Promise<import('@/types/payment').Payment> {
     return this.request<import('@/types/payment').Payment>(
       `/businesses/${businessId}/payments`,
@@ -1836,6 +1932,54 @@ class ApiClient {
     return this.request<import('@/types/payment').Payment>(
       `/businesses/${businessId}/payments/${paymentId}/void`,
       { method: 'POST' }
+    );
+  }
+
+  public async getPaymentAnalyticsSummary(
+    businessId: string,
+    params: { date_from: string; date_to: string; branch_id?: string; direction?: string; payment_method?: string }
+  ): Promise<import('@/types/paymentAnalytics').PaymentAnalyticsSummaryResponse> {
+    const sp = new URLSearchParams();
+    sp.set('date_from', params.date_from);
+    sp.set('date_to', params.date_to);
+    if (params.branch_id) sp.set('branch_id', params.branch_id);
+    if (params.direction) sp.set('direction', params.direction);
+    if (params.payment_method) sp.set('payment_method', params.payment_method);
+    return this.request<import('@/types/paymentAnalytics').PaymentAnalyticsSummaryResponse>(
+      `/businesses/${businessId}/payments/analytics/summary?${sp.toString()}`,
+      { method: 'GET' }
+    );
+  }
+
+  public async getPaymentAnalyticsByDirection(
+    businessId: string,
+    params: { date_from: string; date_to: string; branch_id?: string; direction?: string; payment_method?: string }
+  ): Promise<import('@/types/paymentAnalytics').PaymentAnalyticsByDirectionResponse> {
+    const sp = new URLSearchParams();
+    sp.set('date_from', params.date_from);
+    sp.set('date_to', params.date_to);
+    if (params.branch_id) sp.set('branch_id', params.branch_id);
+    if (params.direction) sp.set('direction', params.direction);
+    if (params.payment_method) sp.set('payment_method', params.payment_method);
+    return this.request<import('@/types/paymentAnalytics').PaymentAnalyticsByDirectionResponse>(
+      `/businesses/${businessId}/payments/analytics/by-direction?${sp.toString()}`,
+      { method: 'GET' }
+    );
+  }
+
+  public async getPaymentAnalyticsByMethod(
+    businessId: string,
+    params: { date_from: string; date_to: string; branch_id?: string; direction?: string; payment_method?: string }
+  ): Promise<import('@/types/paymentAnalytics').PaymentAnalyticsByMethodResponse> {
+    const sp = new URLSearchParams();
+    sp.set('date_from', params.date_from);
+    sp.set('date_to', params.date_to);
+    if (params.branch_id) sp.set('branch_id', params.branch_id);
+    if (params.direction) sp.set('direction', params.direction);
+    if (params.payment_method) sp.set('payment_method', params.payment_method);
+    return this.request<import('@/types/paymentAnalytics').PaymentAnalyticsByMethodResponse>(
+      `/businesses/${businessId}/payments/analytics/by-method?${sp.toString()}`,
+      { method: 'GET' }
     );
   }
 
@@ -2117,10 +2261,33 @@ class ApiClient {
   }
 
   public async getExpenseSummary(
-    businessId: string
+    businessId: string,
+    params?: { date_from?: string; date_to?: string; category_id?: string }
   ): Promise<import('@/types/expense').ExpenseSummaryResponse> {
+    const searchParams = new URLSearchParams();
+    if (params) {
+      if (params.date_from) searchParams.set('date_from', params.date_from);
+      if (params.date_to) searchParams.set('date_to', params.date_to);
+      if (params.category_id) searchParams.set('category_id', params.category_id);
+    }
+    const qs = searchParams.toString();
     return this.request<import('@/types/expense').ExpenseSummaryResponse>(
-      `/businesses/${businessId}/expenses/summary`,
+      `/businesses/${businessId}/expenses/summary${qs ? `?${qs}` : ''}`,
+      { method: 'GET' }
+    );
+  }
+
+  public async getExpenseAnalyticsByCategory(
+    businessId: string,
+    params: { date_from: string; date_to: string; category_id?: string }
+  ): Promise<import('@/types/expenseAnalytics').ExpenseAnalyticsByCategoryResponse> {
+    const searchParams = new URLSearchParams();
+    searchParams.set('date_from', params.date_from);
+    searchParams.set('date_to', params.date_to);
+    if (params.category_id) searchParams.set('category_id', params.category_id);
+    const qs = searchParams.toString();
+    return this.request<import('@/types/expenseAnalytics').ExpenseAnalyticsByCategoryResponse>(
+      `/businesses/${businessId}/expenses/analytics/by-category?${qs}`,
       { method: 'GET' }
     );
   }
@@ -2255,6 +2422,68 @@ class ApiClient {
   // ============================================================
   // STOCK CARD (Feature #42)
   // ============================================================
+  // ============================================================
+  // OPERATIONAL DASHBOARD (Feature #44)
+  // ============================================================
+  // OPERATIONAL DASHBOARD (Feature #44)
+  // ============================================================
+  public async getOperationalDashboard(
+    businessId: string,
+    params?: {
+      date_from?: string;
+      date_to?: string;
+      branch_id?: string;
+    }
+  ): Promise<import('@/types/dashboard').OperationalDashboardResponse> {
+    const searchParams = new URLSearchParams();
+    if (params) {
+      if (params.date_from) searchParams.set('date_from', params.date_from);
+      if (params.date_to) searchParams.set('date_to', params.date_to);
+      if (params.branch_id) searchParams.set('branch_id', params.branch_id);
+    }
+    const qs = searchParams.toString();
+    return this.request<import('@/types/dashboard').OperationalDashboardResponse>(
+      `/businesses/${businessId}/dashboard/operational${qs ? `?${qs}` : ''}`,
+      { method: 'GET' }
+    );
+  }
+
+  // ============================================================
+  // PRODUCT PROFITABILITY (Feature #43)
+  // ============================================================
+  public async getProductProfitability(
+    businessId: string,
+    params?: {
+      period_id?: string;
+      date_from?: string;
+      date_to?: string;
+      group_by?: string;
+      branch_id?: string;
+      product_id?: string;
+      variant_id?: string;
+      category_id?: string;
+      customer_id?: string;
+    }
+  ): Promise<import('@/types/profitability').ProductProfitabilityResponse> {
+    const searchParams = new URLSearchParams();
+    if (params) {
+      if (params.period_id) searchParams.set('period_id', params.period_id);
+      if (params.date_from) searchParams.set('date_from', params.date_from);
+      if (params.date_to) searchParams.set('date_to', params.date_to);
+      if (params.group_by) searchParams.set('group_by', params.group_by);
+      if (params.branch_id) searchParams.set('branch_id', params.branch_id);
+      if (params.product_id) searchParams.set('product_id', params.product_id);
+      if (params.variant_id) searchParams.set('variant_id', params.variant_id);
+      if (params.category_id) searchParams.set('category_id', params.category_id);
+      if (params.customer_id) searchParams.set('customer_id', params.customer_id);
+    }
+    const qs = searchParams.toString();
+    return this.request<import('@/types/profitability').ProductProfitabilityResponse>(
+      `/businesses/${businessId}/reports/product-profitability${qs ? `?${qs}` : ''}`,
+      { method: 'GET' }
+    );
+  }
+
   public async getStockCard(
     businessId: string,
     params: { location_id: string; product_id: string; variant_id?: string; date_from?: string; date_to?: string; page?: number; page_size?: number }
@@ -2270,6 +2499,146 @@ class ApiClient {
     return this.request<StockCardResponse>(
       `/businesses/${businessId}/inventory/stock-cards?${searchParams.toString()}`,
       { method: 'GET' }
+    );
+  }
+
+  // ============================================================
+  // CASHIER SHIFTS (Feature #51)
+  // ============================================================
+
+  public async openShift(
+    businessId: string,
+    payload: import('@/types/shift').CashierShiftCreateInput
+  ): Promise<import('@/types/shift').CashierShift> {
+    return this.request<import('@/types/shift').CashierShift>(
+      `/businesses/${businessId}/shifts`,
+      { method: 'POST', body: JSON.stringify(payload) }
+    );
+  }
+
+  public async listShifts(
+    businessId: string,
+    params?: { status?: string; branch_id?: string; page?: number; page_size?: number }
+  ): Promise<import('@/types/shift').CashierShiftListResponse> {
+    const sp = new URLSearchParams();
+    if (params?.status) sp.set('status', params.status);
+    if (params?.branch_id) sp.set('branch_id', params.branch_id);
+    if (params?.page) sp.set('page', String(params.page));
+    if (params?.page_size) sp.set('page_size', String(params.page_size));
+    const qs = sp.toString();
+    return this.request<import('@/types/shift').CashierShiftListResponse>(
+      `/businesses/${businessId}/shifts${qs ? `?${qs}` : ''}`,
+      { method: 'GET' }
+    );
+  }
+
+  public async getShift(
+    businessId: string,
+    shiftId: string
+  ): Promise<import('@/types/shift').CashierShift> {
+    return this.request<import('@/types/shift').CashierShift>(
+      `/businesses/${businessId}/shifts/${shiftId}`,
+      { method: 'GET' }
+    );
+  }
+
+  public async closeShift(
+    businessId: string,
+    shiftId: string,
+    payload: import('@/types/shift').CashierShiftCloseInput
+  ): Promise<import('@/types/shift').CashierShift> {
+    return this.request<import('@/types/shift').CashierShift>(
+      `/businesses/${businessId}/shifts/${shiftId}/close`,
+      { method: 'PATCH', body: JSON.stringify(payload) }
+    );
+  }
+
+  public async forceCloseShift(
+    businessId: string,
+    shiftId: string,
+    payload: import('@/types/shift').CashierShiftForceCloseInput
+  ): Promise<import('@/types/shift').CashierShift> {
+    return this.request<import('@/types/shift').CashierShift>(
+      `/businesses/${businessId}/shifts/${shiftId}/force-close`,
+      { method: 'PATCH', body: JSON.stringify(payload) }
+    );
+  }
+
+  public async getShiftTransactions(
+    businessId: string,
+    shiftId: string,
+    params?: { page?: number; page_size?: number }
+  ): Promise<import('@/types/cashAccount').CashMovementListResponse> {
+    const sp = new URLSearchParams();
+    if (params?.page) sp.set('page', String(params.page));
+    if (params?.page_size) sp.set('page_size', String(params.page_size));
+    const qs = sp.toString();
+    return this.request<import('@/types/cashAccount').CashMovementListResponse>(
+      `/businesses/${businessId}/shifts/${shiftId}/transactions${qs ? `?${qs}` : ''}`,
+      { method: 'GET' }
+    );
+  }
+
+  // ============================================================
+  // DELIVERY NOTE METHODS (Feature #54)
+  // ============================================================
+
+  public async listDeliveryNotes(
+    businessId: string,
+    params?: { status?: string; sales_order_id?: string; search?: string; page?: number; page_size?: number }
+  ): Promise<DeliveryNoteListResponse> {
+    const sp = new URLSearchParams();
+    if (params?.status) sp.set('status', params.status);
+    if (params?.sales_order_id) sp.set('sales_order_id', params.sales_order_id);
+    if (params?.search) sp.set('search', params.search);
+    if (params?.page) sp.set('page', String(params.page));
+    if (params?.page_size) sp.set('page_size', String(params.page_size));
+    const qs = sp.toString();
+    return this.request<DeliveryNoteListResponse>(
+      `/businesses/${businessId}/delivery-notes${qs ? `?${qs}` : ''}`,
+      { method: 'GET' }
+    );
+  }
+
+  public async createDeliveryNote(businessId: string, payload: DeliveryNoteCreatePayload): Promise<DeliveryNote> {
+    return this.request<DeliveryNote>(
+      `/businesses/${businessId}/delivery-notes`,
+      { method: 'POST', body: JSON.stringify(payload) }
+    );
+  }
+
+  public async getDeliveryNote(businessId: string, deliveryNoteId: string): Promise<DeliveryNote> {
+    return this.request<DeliveryNote>(
+      `/businesses/${businessId}/delivery-notes/${deliveryNoteId}`,
+      { method: 'GET' }
+    );
+  }
+
+  public async updateDeliveryNote(businessId: string, deliveryNoteId: string, payload: DeliveryNoteUpdatePayload): Promise<DeliveryNote> {
+    return this.request<DeliveryNote>(
+      `/businesses/${businessId}/delivery-notes/${deliveryNoteId}`,
+      { method: 'PUT', body: JSON.stringify(payload) }
+    );
+  }
+
+  public async readyDeliveryNote(businessId: string, deliveryNoteId: string): Promise<DeliveryNote> {
+    return this.request<DeliveryNote>(
+      `/businesses/${businessId}/delivery-notes/${deliveryNoteId}/ready`,
+      { method: 'POST' }
+    );
+  }
+
+  public async deliverDeliveryNote(businessId: string, deliveryNoteId: string): Promise<DeliveryNote> {
+    return this.request<DeliveryNote>(
+      `/businesses/${businessId}/delivery-notes/${deliveryNoteId}/deliver`,
+      { method: 'POST' }
+    );
+  }
+
+  public async cancelDeliveryNote(businessId: string, deliveryNoteId: string): Promise<DeliveryNote> {
+    return this.request<DeliveryNote>(
+      `/businesses/${businessId}/delivery-notes/${deliveryNoteId}/cancel`,
+      { method: 'POST' }
     );
   }
 }
@@ -2314,6 +2683,92 @@ export interface StockCardResponse {
   page: number;
   page_size: number;
   total_items: number;
+}
+
+// ============================================================
+// DELIVERY NOTE METHODS (Feature #54)
+// ============================================================
+
+export interface DeliveryNoteLine {
+  id: string;
+  delivery_note_id: string;
+  sales_order_line_id: string;
+  product_id: string;
+  variant_id: string | null;
+  product_name_snapshot: string;
+  variant_snapshot: string | null;
+  ordered_quantity_snapshot: string;
+  fulfilled_quantity_snapshot: string;
+  delivery_quantity: string;
+  unit: string | null;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DeliveryNote {
+  id: string;
+  business_id: string;
+  branch_id: string;
+  delivery_number: string;
+  sales_order_id: string;
+  customer_id: string | null;
+  delivery_date: string;
+  status: string;
+  shipping_address: string | null;
+  recipient_name: string | null;
+  recipient_phone: string | null;
+  notes: string | null;
+  created_by_user_id: string;
+  ready_by_user_id: string | null;
+  ready_at: string | null;
+  delivered_by_user_id: string | null;
+  delivered_at: string | null;
+  cancelled_by_user_id: string | null;
+  cancelled_at: string | null;
+  created_at: string;
+  updated_at: string;
+  lines: DeliveryNoteLine[];
+}
+
+export interface DeliveryNoteListResponse {
+  items: DeliveryNote[];
+  page: number;
+  page_size: number;
+  total: number;
+}
+
+export interface DeliveryNoteCreatePayload {
+  sales_order_id: string;
+  branch_id: string;
+  customer_id?: string | null;
+  delivery_date: string;
+  shipping_address?: string | null;
+  recipient_name?: string | null;
+  recipient_phone?: string | null;
+  notes?: string | null;
+  lines: { sales_order_line_id: string; delivery_quantity: string; notes?: string }[];
+}
+
+export interface DeliveryNoteUpdatePayload {
+  delivery_date?: string | null;
+  shipping_address?: string | null;
+  recipient_name?: string | null;
+  recipient_phone?: string | null;
+  notes?: string | null;
+}
+
+// Extend ApiClient with Delivery Note methods
+declare module './apiClient' {
+  interface ApiClient {
+    listDeliveryNotes(businessId: string, params?: { status?: string; sales_order_id?: string; page?: number; page_size?: number }): Promise<DeliveryNoteListResponse>;
+    createDeliveryNote(businessId: string, payload: DeliveryNoteCreatePayload): Promise<DeliveryNote>;
+    getDeliveryNote(businessId: string, deliveryNoteId: string): Promise<DeliveryNote>;
+    updateDeliveryNote(businessId: string, deliveryNoteId: string, payload: DeliveryNoteUpdatePayload): Promise<DeliveryNote>;
+    readyDeliveryNote(businessId: string, deliveryNoteId: string): Promise<DeliveryNote>;
+    deliverDeliveryNote(businessId: string, deliveryNoteId: string): Promise<DeliveryNote>;
+    cancelDeliveryNote(businessId: string, deliveryNoteId: string): Promise<DeliveryNote>;
+  }
 }
 
 export const apiClient = new ApiClient();

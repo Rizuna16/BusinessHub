@@ -22,6 +22,7 @@ class PaymentMethod(str, Enum):
     CREDIT_CARD = "CREDIT_CARD"
     QRIS = "QRIS"
     E_WALLET = "E_WALLET"
+    STORE_CREDIT = "STORE_CREDIT"
     OTHER = "OTHER"
 
 
@@ -37,11 +38,13 @@ class PaymentCreate(BaseModel):
     amount: Decimal = Field(..., gt=0)
     currency: str = Field("IDR", min_length=3, max_length=3)
     payment_method: PaymentMethod
-    cash_account_id: str = Field(..., min_length=1)
+    cash_account_id: Optional[str] = Field(None, min_length=1)
+    customer_id: Optional[str] = Field(None, min_length=1)
     payment_date: Optional[datetime] = None
     reference_number: Optional[str] = Field(None, max_length=255)
     notes: Optional[str] = Field(None, max_length=1000)
     idempotency_key: Optional[str] = Field(None, max_length=100)
+    shift_id: Optional[str] = Field(None, max_length=100)
 
     model_config = ConfigDict(extra="forbid")
 
@@ -73,7 +76,7 @@ class PaymentInDB(BaseModel):
     payment_method: PaymentMethod
     amount: Decimal
     currency: str
-    cash_account_id: str
+    cash_account_id: Optional[str] = None
     reference_number: Optional[str] = None
     notes: Optional[str] = None
     status: PaymentStatus
@@ -96,3 +99,46 @@ class PaymentListResponse(BaseModel):
     page: int
     page_size: int
     total: int
+
+
+# --- Payment Analytics Schemas ---
+
+class PaymentAnalyticsSummaryResponse(BaseModel):
+    date_from: datetime
+    date_to: datetime
+    gross_recorded: Decimal
+    customer_in_total: Decimal
+    supplier_out_total: Decimal
+    net_payment_flow: Decimal
+    voided_count: int
+    voided_amount: Decimal
+    payment_count: int
+    average_payment_value: Decimal
+
+
+class PaymentDirectionBreakdownItem(BaseModel):
+    direction: str
+    amount: Decimal
+    payment_count: int
+
+
+class PaymentAnalyticsByDirectionResponse(BaseModel):
+    date_from: datetime
+    date_to: datetime
+    gross_recorded: Decimal
+    payment_count: int
+    directions: List[PaymentDirectionBreakdownItem]
+
+
+class PaymentMethodBreakdownItem(BaseModel):
+    payment_method: str
+    amount: Decimal
+    payment_count: int
+
+
+class PaymentAnalyticsByMethodResponse(BaseModel):
+    date_from: datetime
+    date_to: datetime
+    gross_recorded: Decimal
+    payment_count: int
+    methods: List[PaymentMethodBreakdownItem]

@@ -2,6 +2,7 @@ from typing import List, Optional
 from decimal import Decimal
 from datetime import datetime, timezone
 from fastapi import HTTPException, status
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.receiving.schemas import (
     ReceivingInDB,
@@ -35,9 +36,15 @@ class ReceivingService:
         self,
         receiving_repo: AbstractReceivingRepository = receiving_repository,
         membership_service: BusinessMembershipService = business_membership_service,
+        purchase_repo=None,
+        location_repo=None,
+        session: Optional[AsyncSession] = None,
     ):
         self.receiving_repo = receiving_repo
         self.membership_service = membership_service
+        self.purchase_repo = purchase_repo or purchase_repository
+        self.location_repo = location_repo or inventory_location_repository
+        self.session = session
 
     async def _validate_access(
         self,
@@ -54,7 +61,7 @@ class ReceivingService:
         return membership
 
     async def _validate_purchase_finalized(self, business_id: str, purchase_id: str):
-        purchase = await purchase_repository.get_purchase_by_id(purchase_id, business_id)
+        purchase = await self.purchase_repo.get_purchase_by_id(purchase_id, business_id)
         if not purchase:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -73,7 +80,7 @@ class ReceivingService:
         return purchase
 
     async def _validate_location(self, business_id: str, inventory_location_id: str):
-        loc = await inventory_location_repository.get_by_id(inventory_location_id)
+        loc = await self.location_repo.get_by_id(inventory_location_id)
         if not loc or loc.business_id != business_id:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -159,6 +166,14 @@ class ReceivingService:
     async def create_receiving(
         self, business_id: str, user_id: str, payload: ReceivingCreate
     ) -> ReceivingResponse:
+        if self.session is not None:
+            async with self.session.begin():
+                return await self._create_receiving_impl(business_id, user_id, payload)
+        return await self._create_receiving_impl(business_id, user_id, payload)
+
+    async def _create_receiving_impl(
+        self, business_id: str, user_id: str, payload: ReceivingCreate
+    ) -> ReceivingResponse:
         await self._validate_access(
             business_id, user_id, required_roles=(BusinessMembershipRole.OWNER, BusinessMembershipRole.ADMIN)
         )
@@ -237,6 +252,18 @@ class ReceivingService:
         user_id: str,
         payload: ReceivingUpdate,
     ) -> ReceivingResponse:
+        if self.session is not None:
+            async with self.session.begin():
+                return await self._update_receiving_impl(business_id, receiving_id, user_id, payload)
+        return await self._update_receiving_impl(business_id, receiving_id, user_id, payload)
+
+    async def _update_receiving_impl(
+        self,
+        business_id: str,
+        receiving_id: str,
+        user_id: str,
+        payload: ReceivingUpdate,
+    ) -> ReceivingResponse:
         await self._validate_access(
             business_id, user_id, required_roles=(BusinessMembershipRole.OWNER, BusinessMembershipRole.ADMIN)
         )
@@ -264,6 +291,14 @@ class ReceivingService:
         return ReceivingResponse(**updated.model_dump(), lines=line_resp)
 
     async def delete_receiving(
+        self, business_id: str, receiving_id: str, user_id: str
+    ) -> dict:
+        if self.session is not None:
+            async with self.session.begin():
+                return await self._delete_receiving_impl(business_id, receiving_id, user_id)
+        return await self._delete_receiving_impl(business_id, receiving_id, user_id)
+
+    async def _delete_receiving_impl(
         self, business_id: str, receiving_id: str, user_id: str
     ) -> dict:
         await self._validate_access(
@@ -297,6 +332,18 @@ class ReceivingService:
         user_id: str,
         payload: ReceivingLineCreate,
     ) -> ReceivingLineResponse:
+        if self.session is not None:
+            async with self.session.begin():
+                return await self._add_line_impl(business_id, receiving_id, user_id, payload)
+        return await self._add_line_impl(business_id, receiving_id, user_id, payload)
+
+    async def _add_line_impl(
+        self,
+        business_id: str,
+        receiving_id: str,
+        user_id: str,
+        payload: ReceivingLineCreate,
+    ) -> ReceivingLineResponse:
         await self._validate_access(
             business_id, user_id, required_roles=(BusinessMembershipRole.OWNER, BusinessMembershipRole.ADMIN)
         )
@@ -313,7 +360,7 @@ class ReceivingService:
                 detail="Cannot modify lines of a non-draft receiving.",
             )
 
-        purchase_line = await purchase_repository.get_line_by_id(payload.purchase_line_id, r.purchase_id)
+        purchase_line = await self.purchase_repo.get_line_by_id(payload.purchase_line_id, r.purchase_id)
         if not purchase_line:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -345,6 +392,19 @@ class ReceivingService:
         user_id: str,
         payload: ReceivingLineUpdate,
     ) -> ReceivingLineResponse:
+        if self.session is not None:
+            async with self.session.begin():
+                return await self._update_line_impl(business_id, receiving_id, line_id, user_id, payload)
+        return await self._update_line_impl(business_id, receiving_id, line_id, user_id, payload)
+
+    async def _update_line_impl(
+        self,
+        business_id: str,
+        receiving_id: str,
+        line_id: str,
+        user_id: str,
+        payload: ReceivingLineUpdate,
+    ) -> ReceivingLineResponse:
         await self._validate_access(
             business_id, user_id, required_roles=(BusinessMembershipRole.OWNER, BusinessMembershipRole.ADMIN)
         )
@@ -368,11 +428,12 @@ class ReceivingService:
                 detail="Receiving line not found.",
             )
 
-        purchase_line = await purchase_repository.get_line_by_id(line.purchase_line_id, r.purchase_id)
+        purchase_line = await self.purchase_repo.get_line_by_id(line.purchase_line_id, r.purchase_id)
         if not purchase_line:
-            for lid, lval in purchase_repository._lines.items():
-                if lval.id == line.purchase_line_id:
-                    purchase_line = lval
+            purchase_lines = await self.purchase_repo.list_lines_for_purchase(r.purchase_id)
+            for pl in purchase_lines:
+                if pl.id == line.purchase_line_id:
+                    purchase_line = pl
                     break
             if not purchase_line:
                 raise HTTPException(
@@ -397,6 +458,14 @@ class ReceivingService:
         return ReceivingLineResponse.model_validate(updated_line)
 
     async def delete_line(
+        self, business_id: str, receiving_id: str, line_id: str, user_id: str
+    ) -> dict:
+        if self.session is not None:
+            async with self.session.begin():
+                return await self._delete_line_impl(business_id, receiving_id, line_id, user_id)
+        return await self._delete_line_impl(business_id, receiving_id, line_id, user_id)
+
+    async def _delete_line_impl(
         self, business_id: str, receiving_id: str, line_id: str, user_id: str
     ) -> dict:
         await self._validate_access(
@@ -427,6 +496,14 @@ class ReceivingService:
     async def finalize_receiving(
         self, business_id: str, receiving_id: str, user_id: str
     ) -> ReceivingResponse:
+        if self.session is not None:
+            async with self.session.begin():
+                return await self._finalize_receiving_impl(business_id, receiving_id, user_id)
+        return await self._finalize_receiving_impl(business_id, receiving_id, user_id)
+
+    async def _finalize_receiving_impl(
+        self, business_id: str, receiving_id: str, user_id: str
+    ) -> ReceivingResponse:
         await self._validate_access(
             business_id, user_id, required_roles=(BusinessMembershipRole.OWNER, BusinessMembershipRole.ADMIN)
         )
@@ -451,19 +528,18 @@ class ReceivingService:
             )
 
         for line in lines:
-            purchase_line = await purchase_repository.get_line_by_id(line.purchase_line_id, r.purchase_id)
+            purchase_line = await self.purchase_repo.get_line_by_id(line.purchase_line_id, r.purchase_id)
             if not purchase_line:
-                found = None
-                for lid, lval in purchase_repository._lines.items():
-                    if lval.id == line.purchase_line_id and lval.purchase_id == r.purchase_id:
-                        found = lval
+                purchase_lines = await self.purchase_repo.list_lines_for_purchase(r.purchase_id)
+                for pl in purchase_lines:
+                    if pl.id == line.purchase_line_id and pl.purchase_id == r.purchase_id:
+                        purchase_line = pl
                         break
-                if not found:
+                if purchase_line is None:
                     raise HTTPException(
                         status_code=status.HTTP_400_BAD_REQUEST,
                         detail=f"Purchase line {line.purchase_line_id} not found in purchase {r.purchase_id}.",
                     )
-                purchase_line = found
 
         from collections import defaultdict
         qty_by_pline: dict[str, Decimal] = defaultdict(Decimal)
@@ -471,24 +547,16 @@ class ReceivingService:
             qty_by_pline[line.purchase_line_id] += line.quantity
 
         for pline_id, qty_in_this_receiving in qty_by_pline.items():
+            purchase_lines = await self.purchase_repo.list_lines_for_purchase(r.purchase_id)
             purchase_line = None
-            for lid, lval in purchase_repository._lines.items():
-                if lval.id == pline_id:
-                    purchase_line = lval
+            for pl in purchase_lines:
+                if pl.id == pline_id:
+                    purchase_line = pl
                     break
             if not purchase_line:
                 continue
 
-            total_for_line = Decimal("0")
-            for rl in self.receiving_repo._lines.values():
-                if rl.purchase_line_id != pline_id:
-                    continue
-                rr = self.receiving_repo._receivings.get(rl.receiving_id)
-                if not rr or rr.is_deleted:
-                    continue
-                if rr.status == ReceivingStatus.CANCELLED:
-                    continue
-                total_for_line += rl.quantity
+            total_for_line = await self.receiving_repo.sum_received_quantity_for_purchase_line(pline_id)
 
             if total_for_line > purchase_line.quantity:
                 raise HTTPException(
@@ -509,6 +577,14 @@ class ReceivingService:
         return ReceivingResponse(**updated.model_dump(), lines=line_resp)
 
     async def cancel_receiving(
+        self, business_id: str, receiving_id: str, user_id: str
+    ) -> ReceivingResponse:
+        if self.session is not None:
+            async with self.session.begin():
+                return await self._cancel_receiving_impl(business_id, receiving_id, user_id)
+        return await self._cancel_receiving_impl(business_id, receiving_id, user_id)
+
+    async def _cancel_receiving_impl(
         self, business_id: str, receiving_id: str, user_id: str
     ) -> ReceivingResponse:
         await self._validate_access(

@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
+from decimal import Decimal
 import uuid
 from abc import ABC, abstractmethod
 from pydantic import BaseModel
@@ -29,6 +30,8 @@ class CustomerInDB(BaseModel):
     country: Optional[str] = None
     notes: Optional[str] = None
     status: CustomerStatus = CustomerStatus.ACTIVE
+    credit_limit: Decimal = Decimal("0.00")
+    store_credit_balance: Decimal = Decimal("0.00")
     created_at: datetime
     updated_at: datetime
 
@@ -74,6 +77,16 @@ class AbstractCustomerRepository(ABC):
         customer_id: str,
         business_id: str,
         status: CustomerStatus,
+    ) -> Optional[CustomerInDB]:
+        pass
+
+    @abstractmethod
+    async def update_credit_fields(
+        self,
+        customer_id: str,
+        business_id: str,
+        credit_limit: Optional[Decimal] = None,
+        store_credit_balance: Optional[Decimal] = None,
     ) -> Optional[CustomerInDB]:
         pass
 
@@ -125,6 +138,8 @@ class InMemoryCustomerRepository(AbstractCustomerRepository):
             country=customer_data.country,
             notes=customer_data.notes,
             status=CustomerStatus.ACTIVE,
+            credit_limit=customer_data.credit_limit,
+            store_credit_balance=customer_data.store_credit_balance,
             created_at=now,
             updated_at=now,
         )
@@ -222,6 +237,26 @@ class InMemoryCustomerRepository(AbstractCustomerRepository):
                 "updated_at": datetime.now(timezone.utc),
             }
         )
+        self._customers[key] = updated
+        return updated
+
+    async def update_credit_fields(
+        self,
+        customer_id: str,
+        business_id: str,
+        credit_limit: Optional[Decimal] = None,
+        store_credit_balance: Optional[Decimal] = None,
+    ) -> Optional[CustomerInDB]:
+        key = self._key(business_id, customer_id)
+        customer = self._customers.get(key)
+        if not customer:
+            return None
+        updates: dict = {"updated_at": datetime.now(timezone.utc)}
+        if credit_limit is not None:
+            updates["credit_limit"] = credit_limit
+        if store_credit_balance is not None:
+            updates["store_credit_balance"] = store_credit_balance
+        updated = customer.model_copy(update=updates)
         self._customers[key] = updated
         return updated
 

@@ -78,6 +78,7 @@ class AbstractCashAccountRepository(ABC):
         reference_type: Optional[str] = None,
         reference_id: Optional[str] = None,
         description: Optional[str] = None,
+        shift_id: Optional[str] = None,
     ) -> CashMovementInDB:
         pass
 
@@ -257,6 +258,7 @@ class InMemoryCashAccountRepository(AbstractCashAccountRepository):
         reference_type: Optional[str] = None,
         reference_id: Optional[str] = None,
         description: Optional[str] = None,
+        shift_id: Optional[str] = None,
     ) -> CashMovementInDB:
         mov_id = str(uuid.uuid4())
         now = datetime.now(timezone.utc)
@@ -271,6 +273,7 @@ class InMemoryCashAccountRepository(AbstractCashAccountRepository):
             reference_id=reference_id,
             description=description,
             performed_by_user_id=performed_by_user_id,
+            shift_id=shift_id,
             status=CashMovementStatus.POSTED,
             created_at=now,
             updated_at=now,

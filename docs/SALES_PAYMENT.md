@@ -10,7 +10,7 @@ Key responsibilities:
 - Exposing payment summaries for future downstream consumers (#26 Customer Receivable).
 
 Explicit non-responsibilities:
-- Payment Engine & Gateway integrations (#32, #50 Midtrans).
+- Payment Engine & Gateway integrations (#32).
 - Customer Receivable & AR Ledger (#26).
 - Accounting Journals & Accounts (#33).
 - Cash Account balance tracking (#28).
@@ -82,7 +82,7 @@ Explicit non-responsibilities:
 
 - **Inventory Boundary**: 0 inventory changes occur during payment creation or cancellation.
 - **Receivable Boundary**: Payment foundation exposes `total_paid` and `remaining_amount` for #26 Customer Receivable without introducing AR ledgers.
-- **Payment Engine & Gateway Boundary**: Gateway references, webhooks, and multi-provider state machine belong to Payment Engine #32 and Midtrans #50.
+- **Payment Engine & Gateway Boundary**: Gateway references, webhooks, and multi-provider state machine belong to Payment Engine #32.
 - **Accounting Boundary**: No GL postings or tax postings.
 
 ---

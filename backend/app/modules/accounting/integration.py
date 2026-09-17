@@ -36,6 +36,7 @@ ACCOUNT_INVENTORY_ASSETS = "1300"
 ACCOUNT_INPUT_VAT = "1400"
 ACCOUNT_ACCOUNTS_PAYABLE = "2100"
 ACCOUNT_OUTPUT_VAT = "2200"
+ACCOUNT_STORE_CREDIT_LIABILITY = "2300"
 ACCOUNT_SALES_REVENUE = "4100"
 ACCOUNT_GENERAL_EXPENSE = "5100"
 ACCOUNT_COGS = "5200"
@@ -234,9 +235,14 @@ class AccountingIntegrationService:
         tax_total: Decimal = Decimal("0"),
         reversal_cogs: Decimal = Decimal("0"),
         branch_id: Optional[str] = None,
+        refund_destination: str = "CASH",
     ) -> Optional[str]:
         """
         Journal: Reverses sales revenue and COGS.
+
+        For CASH refunds:        DR Revenue / CR AR          (original behavior)
+        For STORE_CREDIT refunds: DR Revenue / CR Store Credit Liability
+
         Idempotent: same sales_return_id → same journal.
         """
         if grand_total <= Decimal("0") and reversal_cogs <= Decimal("0"):
@@ -252,7 +258,11 @@ class AccountingIntegrationService:
             else:
                 lines.append((ACCOUNT_SALES_REVENUE, grand_total, Decimal("0")))
 
-            lines.append((ACCOUNT_ACCOUNTS_RECEIVABLE, Decimal("0"), grand_total))
+            # Feature #61: STORE_CREDIT → CR Store Credit Liability instead of CR AR
+            if refund_destination == "STORE_CREDIT":
+                lines.append((ACCOUNT_STORE_CREDIT_LIABILITY, Decimal("0"), grand_total))
+            else:
+                lines.append((ACCOUNT_ACCOUNTS_RECEIVABLE, Decimal("0"), grand_total))
 
         if reversal_cogs > Decimal("0"):
             lines.append((ACCOUNT_INVENTORY_ASSETS, reversal_cogs, Decimal("0")))
@@ -283,30 +293,51 @@ class AccountingIntegrationService:
         direction: str,
         payment_date: datetime,
         branch_id: Optional[str] = None,
+        payment_method: Optional[str] = None,
     ) -> Optional[str]:
         """
-        Customer Payment (CUSTOMER_IN): Debit Cash (1100) / Credit Accounts Receivable (1200).
-        Supplier Payment (SUPPLIER_OUT): Debit Accounts Payable (2100) / Credit Cash (1100).
+        Customer Payment (CUSTOMER_IN):
+            - CASH/BANK:       Debit Cash (1100) / Credit Accounts Receivable (1200)
+            - STORE_CREDIT:    Debit Store Credit Liability (2300) / Credit Accounts Receivable (1200)
+        Supplier Payment (SUPPLIER_OUT):
+            Debit Accounts Payable (2100) / Credit Cash (1100).
         Idempotent: same payment_id → same journal.
         """
         if amount <= Decimal("0"):
             return None
 
         if direction == "CUSTOMER_IN":
-            return await self._post_journal(
-                business_id=business_id,
-                user_id=user_id,
-                source_type="PAYMENT",
-                source_id=payment_id,
-                event="RECORDED",
-                description=f"Customer payment received",
-                journal_date=payment_date,
-                lines=[
-                    (ACCOUNT_CASH_BANK, amount, Decimal("0")),
-                    (ACCOUNT_ACCOUNTS_RECEIVABLE, Decimal("0"), amount),
-                ],
-                branch_id=branch_id,
-            )
+            # Feature #61: STORE_CREDIT uses liability account instead of cash
+            if payment_method == "STORE_CREDIT":
+                return await self._post_journal(
+                    business_id=business_id,
+                    user_id=user_id,
+                    source_type="PAYMENT",
+                    source_id=payment_id,
+                    event="RECORDED",
+                    description="Store credit payment received",
+                    journal_date=payment_date,
+                    lines=[
+                        (ACCOUNT_STORE_CREDIT_LIABILITY, amount, Decimal("0")),
+                        (ACCOUNT_ACCOUNTS_RECEIVABLE, Decimal("0"), amount),
+                    ],
+                    branch_id=branch_id,
+                )
+            else:
+                return await self._post_journal(
+                    business_id=business_id,
+                    user_id=user_id,
+                    source_type="PAYMENT",
+                    source_id=payment_id,
+                    event="RECORDED",
+                    description=f"Customer payment received",
+                    journal_date=payment_date,
+                    lines=[
+                        (ACCOUNT_CASH_BANK, amount, Decimal("0")),
+                        (ACCOUNT_ACCOUNTS_RECEIVABLE, Decimal("0"), amount),
+                    ],
+                    branch_id=branch_id,
+                )
         elif direction == "SUPPLIER_OUT":
             return await self._post_journal(
                 business_id=business_id,

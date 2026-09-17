@@ -82,6 +82,7 @@ DEFAULT_CHART_OF_ACCOUNTS = [
     {"code": "2000", "name": "LIABILITIES", "account_type": AccountType.LIABILITY, "normal_balance": NormalBalance.CREDIT, "is_system": True},
     {"code": "2100", "name": "Accounts Payable", "account_type": AccountType.LIABILITY, "normal_balance": NormalBalance.CREDIT, "is_system": True},
     {"code": "2200", "name": "PPN Keluaran (Output VAT)", "account_type": AccountType.LIABILITY, "normal_balance": NormalBalance.CREDIT, "is_system": True},
+    {"code": "2300", "name": "Customer Store Credit Liability", "account_type": AccountType.LIABILITY, "normal_balance": NormalBalance.CREDIT, "is_system": True},
 
     # EQUITY (Normal balance CREDIT)
     {"code": "3000", "name": "EQUITY", "account_type": AccountType.EQUITY, "normal_balance": NormalBalance.CREDIT, "is_system": True},
@@ -106,12 +107,14 @@ class AccountingService:
         payment_repo: AbstractPaymentRepository = payment_repository,
         expense_repo: AbstractExpenseRepository = expense_repository,
         cash_account_repo: AbstractCashAccountRepository = cash_account_repository,
+        branch_repo=None,
     ):
         self.repository = repository
         self.membership_service = membership_service
         self.payment_repo = payment_repo
         self.expense_repo = expense_repo
         self.cash_account_repo = cash_account_repo
+        self.branch_repo = branch_repo
 
     async def _validate_access(
         self,
@@ -309,7 +312,7 @@ class AccountingService:
 
         # Branch validation if provided
         if payload.branch_id:
-            br = await branch_repository.get_by_id(payload.branch_id)
+            br = await (self.branch_repo or branch_repository).get_by_id(payload.branch_id)
             if not br or br.business_id != business_id:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,

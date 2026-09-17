@@ -1,8 +1,13 @@
 from fastapi import APIRouter, Depends, HTTPException, Path, status
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.core.database import get_db_session
+from app.core.container import RepositoryContainer
 from app.modules.business.schemas import BusinessCreate, BusinessResponse, BusinessUpdate
 from app.modules.business.service import BusinessService, business_service
+from app.modules.business_membership.service import BusinessMembershipService
+from app.modules.subscription.service import SubscriptionService
 from app.modules.authentication.router import get_current_user
 from app.modules.authentication.schemas import UserResponse
 
@@ -13,11 +18,34 @@ def get_business_service() -> BusinessService:
     return business_service
 
 
+async def get_scoped_business_service(session: AsyncSession = Depends(get_db_session)) -> BusinessService:
+    """
+    Request-scoped BusinessService wired to the same AsyncSession for transaction boundary.
+    All repositories share the same AsyncSession for consistency.
+    """
+    container = RepositoryContainer(session)
+    membership_svc = BusinessMembershipService(
+        repository=container.business_membership,
+        user_repo=container.user,
+        account_repo=container.account,
+        business_repo=container.business,
+    )
+    subscription_svc = SubscriptionService(
+        repository=container.subscription,
+    )
+    return BusinessService(
+        repository=container.business,
+        membership_service=membership_svc,
+        subscription_service_instance=subscription_svc,
+        session=session,
+    )
+
+
 @router.post("", response_model=BusinessResponse, status_code=201)
 async def create_business(
     business_data: BusinessCreate,
     current_user: UserResponse = Depends(get_current_user),
-    biz_service: BusinessService = Depends(get_business_service),
+    biz_service: BusinessService = Depends(get_scoped_business_service),
 ) -> BusinessResponse:
     """
     Create a new Business.
@@ -31,7 +59,7 @@ async def create_business(
 @router.get("", response_model=list[BusinessResponse])
 async def list_businesses(
     current_user: UserResponse = Depends(get_current_user),
-    biz_service: BusinessService = Depends(get_business_service),
+    biz_service: BusinessService = Depends(get_scoped_business_service),
 ) -> list[BusinessResponse]:
     """
     List all active businesses owned by the current authenticated user.
@@ -45,7 +73,7 @@ async def list_businesses(
 async def get_business(
     business_id: str = Path(...),
     current_user: UserResponse = Depends(get_current_user),
-    biz_service: BusinessService = Depends(get_business_service),
+    biz_service: BusinessService = Depends(get_scoped_business_service),
 ) -> BusinessResponse:
     """
     Get a single business by ID.
@@ -60,7 +88,7 @@ async def update_business(
     business_update: BusinessUpdate,
     business_id: str = Path(...),
     current_user: UserResponse = Depends(get_current_user),
-    biz_service: BusinessService = Depends(get_business_service),
+    biz_service: BusinessService = Depends(get_scoped_business_service),
 ) -> BusinessResponse:
     """
     Update a business owned by the current user.
@@ -75,7 +103,7 @@ async def update_business(
 async def archive_business(
     business_id: str = Path(...),
     current_user: UserResponse = Depends(get_current_user),
-    biz_service: BusinessService = Depends(get_business_service),
+    biz_service: BusinessService = Depends(get_scoped_business_service),
 ) -> BusinessResponse:
     """
     Soft-archive a business owned by the current user.

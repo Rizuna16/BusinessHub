@@ -3,6 +3,7 @@ from decimal import Decimal
 from datetime import datetime, timezone
 import uuid
 from fastapi import HTTPException, status
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.purchase.schemas import (
     PurchaseInDB,
@@ -17,6 +18,11 @@ from app.modules.purchase.schemas import (
     PurchaseStatus,
     DerivedReceivingStatus,
     PurchaseReceivingSummary,
+    PurchaseAnalyticsSummaryResponse,
+    PurchaseSupplierBreakdownItem,
+    PurchaseAnalyticsBySupplierResponse,
+    PurchaseCategoryBreakdownItem,
+    PurchaseAnalyticsByCategoryResponse,
 )
 from app.modules.purchase.repository import (
     AbstractPurchaseRepository,
@@ -30,6 +36,9 @@ from app.modules.business_membership.schemas import BusinessMembershipRole
 from app.modules.supplier.repository import supplier_repository
 from app.modules.branch.repository import branch_repository
 from app.modules.product.repository import product_repository
+from app.modules.category.repository import category_repository
+from app.modules.purchase_return.repository import purchase_return_repository, AbstractPurchaseReturnRepository
+from app.modules.purchase_return.schemas import PurchaseReturnStatus
 from app.modules.product_variant.repository import product_variant_repository
 from app.modules.supplier.schemas import SupplierStatus
 from app.modules.branch.schemas import BranchStatus
@@ -58,13 +67,29 @@ class PurchaseService:
         membership_service: BusinessMembershipService = business_membership_service,
         receiving_repo: AbstractReceivingRepository = receiving_repository,
         catalog_repo: AbstractSupplierCatalogRepository = supplier_catalog_repository,
+        purchase_return_repo: AbstractPurchaseReturnRepository = purchase_return_repository,
         inv_service: InventoryService = inventory_service,
+        supplier_repo=None,
+        branch_repo=None,
+        product_repo=None,
+        category_repo=None,
+        accounting_repo=None,
+        accounting_integration=None,
+        session: Optional[AsyncSession] = None,
     ):
         self.purchase_repo = purchase_repo
         self.membership_service = membership_service
         self.receiving_repo = receiving_repo
         self.catalog_repo = catalog_repo
+        self.purchase_return_repo = purchase_return_repo
         self.inv_service = inv_service
+        self.supplier_repo = supplier_repo or supplier_repository
+        self.branch_repo = branch_repo or branch_repository
+        self.product_repo = product_repo or product_repository
+        self.category_repo = category_repo or category_repository
+        self.accounting_repo = accounting_repo or accounting_repository
+        self.accounting_integration = accounting_integration or accounting_integration_service
+        self.session = session
 
     async def _validate_access(
         self,
@@ -81,7 +106,7 @@ class PurchaseService:
         return membership
 
     async def _validate_supplier(self, business_id: str, supplier_id: str):
-        supplier = await supplier_repository.get_by_id(supplier_id, business_id)
+        supplier = await self.supplier_repo.get_by_id(supplier_id, business_id)
         if not supplier:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -95,7 +120,7 @@ class PurchaseService:
         return supplier
 
     async def _validate_branch(self, business_id: str, branch_id: str):
-        branch = await branch_repository.get_by_id(branch_id)
+        branch = await self.branch_repo.get_by_id(branch_id)
         if not branch or branch.business_id != business_id:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -111,7 +136,7 @@ class PurchaseService:
     async def _validate_product_and_variant(
         self, business_id: str, product_id: str, variant_id: Optional[str]
     ):
-        product = await product_repository.get_by_id(product_id, business_id)
+        product = await self.product_repo.get_by_id(product_id, business_id)
         if not product:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -233,6 +258,15 @@ class PurchaseService:
     async def create_purchase(
         self, business_id: str, user_id: str, payload: PurchaseCreate
     ) -> PurchaseResponse:
+        if self.session is not None:
+            async with self.session.begin():
+                return await self._create_purchase_impl(business_id, user_id, payload)
+        else:
+            return await self._create_purchase_impl(business_id, user_id, payload)
+
+    async def _create_purchase_impl(
+        self, business_id: str, user_id: str, payload: PurchaseCreate
+    ) -> PurchaseResponse:
         await self._validate_access(
             business_id, user_id, required_roles=(BusinessMembershipRole.OWNER, BusinessMembershipRole.ADMIN)
         )
@@ -318,6 +352,19 @@ class PurchaseService:
         user_id: str,
         payload: PurchaseUpdate,
     ) -> PurchaseResponse:
+        if self.session is not None:
+            async with self.session.begin():
+                return await self._update_purchase_impl(business_id, purchase_id, user_id, payload)
+        else:
+            return await self._update_purchase_impl(business_id, purchase_id, user_id, payload)
+
+    async def _update_purchase_impl(
+        self,
+        business_id: str,
+        purchase_id: str,
+        user_id: str,
+        payload: PurchaseUpdate,
+    ) -> PurchaseResponse:
         await self._validate_access(
             business_id, user_id, required_roles=(BusinessMembershipRole.OWNER, BusinessMembershipRole.ADMIN)
         )
@@ -353,6 +400,15 @@ class PurchaseService:
     async def delete_purchase_draft(
         self, business_id: str, purchase_id: str, user_id: str
     ) -> dict:
+        if self.session is not None:
+            async with self.session.begin():
+                return await self._delete_purchase_draft_impl(business_id, purchase_id, user_id)
+        else:
+            return await self._delete_purchase_draft_impl(business_id, purchase_id, user_id)
+
+    async def _delete_purchase_draft_impl(
+        self, business_id: str, purchase_id: str, user_id: str
+    ) -> dict:
         await self._validate_access(
             business_id, user_id, required_roles=(BusinessMembershipRole.OWNER, BusinessMembershipRole.ADMIN)
         )
@@ -384,6 +440,19 @@ class PurchaseService:
         user_id: str,
         payload: PurchaseLineCreate,
     ) -> PurchaseLineResponse:
+        if self.session is not None:
+            async with self.session.begin():
+                return await self._add_line_impl(business_id, purchase_id, user_id, payload)
+        else:
+            return await self._add_line_impl(business_id, purchase_id, user_id, payload)
+
+    async def _add_line_impl(
+        self,
+        business_id: str,
+        purchase_id: str,
+        user_id: str,
+        payload: PurchaseLineCreate,
+    ) -> PurchaseLineResponse:
         await self._validate_access(
             business_id, user_id, required_roles=(BusinessMembershipRole.OWNER, BusinessMembershipRole.ADMIN)
         )
@@ -403,7 +472,7 @@ class PurchaseService:
         await self._validate_product_and_variant(business_id, payload.product_id, payload.variant_id)
 
         # Resolve tax treatment from product and business config
-        product = await product_repository.get_by_id(payload.product_id, business_id)
+        product = await self.product_repo.get_by_id(payload.product_id, business_id)
         tax_treatment_val = "STANDARD_NON_LUXURY"
         pricing_mode_val = "TAX_EXCLUSIVE"
         tax_enabled = False
@@ -413,7 +482,7 @@ class PurchaseService:
             if pt:
                 tax_treatment_val = pt.value if hasattr(pt, 'value') else "STANDARD_NON_LUXURY"
 
-        tc = await accounting_repository.get_tax_config_by_business(business_id)
+        tc = await self.accounting_repo.get_tax_config_by_business(business_id)
         if tc:
             pricing_mode_val = tc.pricing_mode.value
             tax_enabled = tc.tax_enabled
@@ -479,6 +548,20 @@ class PurchaseService:
         )
 
     async def update_line(
+        self,
+        business_id: str,
+        purchase_id: str,
+        line_id: str,
+        user_id: str,
+        payload: PurchaseLineUpdate,
+    ) -> PurchaseLineResponse:
+        if self.session is not None:
+            async with self.session.begin():
+                return await self._update_line_impl(business_id, purchase_id, line_id, user_id, payload)
+        else:
+            return await self._update_line_impl(business_id, purchase_id, line_id, user_id, payload)
+
+    async def _update_line_impl(
         self,
         business_id: str,
         purchase_id: str,
@@ -570,6 +653,15 @@ class PurchaseService:
     async def delete_line(
         self, business_id: str, purchase_id: str, line_id: str, user_id: str
     ) -> dict:
+        if self.session is not None:
+            async with self.session.begin():
+                return await self._delete_line_impl(business_id, purchase_id, line_id, user_id)
+        else:
+            return await self._delete_line_impl(business_id, purchase_id, line_id, user_id)
+
+    async def _delete_line_impl(
+        self, business_id: str, purchase_id: str, line_id: str, user_id: str
+    ) -> dict:
         await self._validate_access(
             business_id, user_id, required_roles=(BusinessMembershipRole.OWNER, BusinessMembershipRole.ADMIN)
         )
@@ -597,6 +689,15 @@ class PurchaseService:
         return {"message": "Purchase line successfully deleted."}
 
     async def finalize_purchase(
+        self, business_id: str, purchase_id: str, user_id: str
+    ) -> PurchaseResponse:
+        if self.session is not None:
+            async with self.session.begin():
+                return await self._finalize_purchase_impl(business_id, purchase_id, user_id)
+        else:
+            return await self._finalize_purchase_impl(business_id, purchase_id, user_id)
+
+    async def _finalize_purchase_impl(
         self, business_id: str, purchase_id: str, user_id: str
     ) -> PurchaseResponse:
         await self._validate_access(
@@ -641,13 +742,13 @@ class PurchaseService:
         await self._recalculate_totals(business_id, purchase_id)
 
         # Freeze TaxSnapshot for each line
-        tc = await accounting_repository.get_tax_config_by_business(business_id)
+        tc = await self.accounting_repo.get_tax_config_by_business(business_id)
         pricing_mode_val = tc.pricing_mode.value if tc else "TAX_EXCLUSIVE"
 
         for l in lines:
             if l.tax_amount == Decimal("0"):
                 continue
-            product = await product_repository.get_by_id(l.product_id, business_id)
+            product = await self.product_repo.get_by_id(l.product_id, business_id)
             product_tax_val = "STANDARD_NON_LUXURY"
             if product:
                 pt = getattr(product, 'tax_treatment', None)
@@ -677,13 +778,12 @@ class PurchaseService:
         tax_total = p_updated.tax_total if p_updated else Decimal("0")
         now = datetime.now(timezone.utc)
 
-        # ── ATOMIC BOUNDARY START ──
         # Accounting posting FIRST (idempotent, safe to retry).
         # If this fails, NO operational status change occurs.
         idem_key = f"PURCHASE:{purchase_id}:FINALIZED"
-        await accounting_integration_service.safe_post(
+        await self.accounting_integration.safe_post(
             idem_key,
-            lambda: accounting_integration_service.post_purchase_finalized(
+            lambda: self.accounting_integration.post_purchase_finalized(
                 business_id=business_id,
                 user_id=user_id,
                 purchase_id=purchase_id,
@@ -695,41 +795,38 @@ class PurchaseService:
             )
         )
 
-        # Update physical stock & cost pool (graceful if no warehouse/location resolved)
-        try:
-            location_id = await self.inv_service._resolve_sale_location(business_id, None, p_updated.branch_id if p_updated else None)
-            creditable = p_updated.input_vat_creditable if p_updated else False
+        # Update physical stock & cost pool — exceptions propagate for transaction rollback.
+        location_id = await self.inv_service._resolve_sale_location(business_id, None, p_updated.branch_id if p_updated else None)
+        creditable = p_updated.input_vat_creditable if p_updated else False
 
-            for l in lines:
-                # Physical stock increment
-                await self.inv_service.balance_repo.upsert_balance(
-                    business_id=business_id,
-                    inventory_location_id=location_id,
-                    product_id=l.product_id,
-                    variant_id=l.variant_id,
-                    delta=l.quantity,
-                )
+        for l in lines:
+            # Physical stock increment
+            await self.inv_service.balance_repo.upsert_balance(
+                business_id=business_id,
+                inventory_location_id=location_id,
+                product_id=l.product_id,
+                variant_id=l.variant_id,
+                delta=l.quantity,
+            )
 
-                # Inbound line cost calculation
-                if creditable:
-                    line_net_cost = l.line_subtotal - l.discount_amount
-                else:
-                    line_net_cost = l.line_total
+            # Inbound line cost calculation
+            if creditable:
+                line_net_cost = l.line_subtotal - l.discount_amount
+            else:
+                line_net_cost = l.line_total
 
-                unit_acquisition_cost = line_net_cost / l.quantity if l.quantity > Decimal("0") else Decimal("0")
+            unit_acquisition_cost = line_net_cost / l.quantity if l.quantity > Decimal("0") else Decimal("0")
 
-                await self.inv_service.record_cost_inbound(
-                    business_id=business_id,
-                    product_id=l.product_id,
-                    variant_id=l.variant_id,
-                    inbound_qty=l.quantity,
-                    inbound_unit_cost=unit_acquisition_cost,
-                    movement_type=InventoryCostMovementType.PURCHASE_IN,
-                    reference_type="PURCHASE",
-                    reference_id=purchase_id,
-                )
-        except Exception:
-            pass  # Skip physical/cost update if warehouse/location unavailable
+            await self.inv_service.record_cost_inbound(
+                business_id=business_id,
+                product_id=l.product_id,
+                variant_id=l.variant_id,
+                inbound_qty=l.quantity,
+                inbound_unit_cost=unit_acquisition_cost,
+                movement_type=InventoryCostMovementType.PURCHASE_IN,
+                reference_type="PURCHASE",
+                reference_id=purchase_id,
+            )
 
         updated = await self.purchase_repo.update_purchase(
             purchase_id=purchase_id,
@@ -738,11 +835,19 @@ class PurchaseService:
             finalized_by_user_id=user_id,
             finalized_at=now,
         )
-        # ── ATOMIC BOUNDARY END ──
 
         return await self._build_purchase_response(business_id, updated)
 
     async def cancel_purchase(
+        self, business_id: str, purchase_id: str, user_id: str
+    ) -> PurchaseResponse:
+        if self.session is not None:
+            async with self.session.begin():
+                return await self._cancel_purchase_impl(business_id, purchase_id, user_id)
+        else:
+            return await self._cancel_purchase_impl(business_id, purchase_id, user_id)
+
+    async def _cancel_purchase_impl(
         self, business_id: str, purchase_id: str, user_id: str
     ) -> PurchaseResponse:
         await self._validate_access(
@@ -781,6 +886,254 @@ class PurchaseService:
         )
 
         return await self._build_purchase_response(business_id, updated)
+
+
+# --- Purchase Analytics ---
+
+    async def _validate_analytics_entities(
+        self,
+        business_id: str,
+        category_id: Optional[str] = None,
+        supplier_id: Optional[str] = None,
+        branch_id: Optional[str] = None,
+    ):
+        if category_id:
+            cat = await self.category_repo.get_by_id(category_id, business_id)
+            if not cat:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Category not found in this business.")
+        if supplier_id:
+            sup = await self.supplier_repo.get_by_id(supplier_id, business_id)
+            if not sup:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Supplier not found in this business.")
+        if branch_id:
+            br = await self.branch_repo.get_by_id(branch_id)
+            if not br or br.business_id != business_id:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Branch not found in this business.")
+
+    async def get_purchase_analytics_summary(
+        self,
+        business_id: str,
+        user_id: str,
+        date_from: datetime,
+        date_to: datetime,
+        category_id: Optional[str] = None,
+        supplier_id: Optional[str] = None,
+        branch_id: Optional[str] = None,
+    ) -> PurchaseAnalyticsSummaryResponse:
+        await self._validate_access(business_id, user_id)
+        if date_from > date_to:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="date_from must be before or equal to date_to.")
+        await self._validate_analytics_entities(business_id, category_id, supplier_id, branch_id)
+
+        purchases, _ = await self.purchase_repo.list_purchases(
+            business_id=business_id, status=PurchaseStatus.FINALIZED,
+            supplier_id=supplier_id, branch_id=branch_id, page=1, page_size=10000,
+        )
+
+        # Filter by purchase_date range (inclusive on both ends since date_to is a calendar date)
+        filtered_purchases = [p for p in purchases if p.purchase_date >= date_from and p.purchase_date <= date_to]
+
+        # If category_id filter, only include purchases with lines matching that category
+        if category_id:
+            cat_purchases = []
+            for p in filtered_purchases:
+                lines = await self.purchase_repo.list_lines_for_purchase(p.id)
+                for line in lines:
+                    product = await self.product_repo.get_by_id(line.product_id, business_id)
+                    if product and product.category_id == category_id:
+                        cat_purchases.append(p)
+                        break
+            filtered_purchases = cat_purchases
+
+        gross_purchases = Decimal("0")
+        discount_total = Decimal("0")
+        tax_total = Decimal("0")
+        purchase_count = 0
+
+        for p in filtered_purchases:
+            gross_purchases += p.grand_total
+            discount_total += p.discount_total
+            tax_total += p.tax_total
+            purchase_count += 1
+
+        # Fetch finalized purchase returns using created_at as return activity date
+        all_returns, _ = await self.purchase_return_repo.list_returns(
+            business_id=business_id, status=PurchaseReturnStatus.FINALIZED,
+        )
+
+        purchase_returns = Decimal("0")
+        for r in all_returns:
+            if r.created_at >= date_from and r.created_at <= date_to:
+                purchase_returns += r.grand_total
+
+        average_purchase_value = gross_purchases / purchase_count if purchase_count > 0 else Decimal("0")
+
+        return PurchaseAnalyticsSummaryResponse(
+            date_from=date_from, date_to=date_to,
+            gross_purchases=gross_purchases,
+            purchase_returns=purchase_returns,
+            net_purchases=gross_purchases - purchase_returns,
+            discount_total=discount_total, tax_total=tax_total,
+            purchase_count=purchase_count,
+            average_purchase_value=average_purchase_value,
+        )
+
+    async def get_purchase_analytics_by_supplier(
+        self,
+        business_id: str,
+        user_id: str,
+        date_from: datetime,
+        date_to: datetime,
+        category_id: Optional[str] = None,
+        supplier_id: Optional[str] = None,
+        branch_id: Optional[str] = None,
+    ) -> PurchaseAnalyticsBySupplierResponse:
+        await self._validate_access(business_id, user_id)
+        if date_from > date_to:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="date_from must be before or equal to date_to.")
+        await self._validate_analytics_entities(business_id, category_id, supplier_id, branch_id)
+
+        purchases, _ = await self.purchase_repo.list_purchases(
+            business_id=business_id, status=PurchaseStatus.FINALIZED,
+            supplier_id=supplier_id, branch_id=branch_id, page=1, page_size=10000,
+        )
+        filtered_purchases = [p for p in purchases if p.purchase_date >= date_from and p.purchase_date <= date_to]
+
+        if category_id:
+            cat_purchases = []
+            for p in filtered_purchases:
+                lines = await self.purchase_repo.list_lines_for_purchase(p.id)
+                for line in lines:
+                    product = await self.product_repo.get_by_id(line.product_id, business_id)
+                    if product and product.category_id == category_id:
+                        cat_purchases.append(p)
+                        break
+            filtered_purchases = cat_purchases
+
+        sup_map: dict[str, dict] = {}
+        for p in filtered_purchases:
+            sid = p.supplier_id
+            if sid not in sup_map:
+                sup = await self.supplier_repo.get_by_id(sup_id, business_id)
+                sup_map[sid] = {
+                    "supplier_id": sid,
+                    "supplier_code": sup.code if sup else "UNKNOWN",
+                    "supplier_name": sup.name if sup else "Unknown",
+                    "gross_purchases": Decimal("0"),
+                    "purchase_returns": Decimal("0"),
+                    "net_purchases": Decimal("0"),
+                    "purchase_count": 0,
+                }
+            sup_map[sid]["gross_purchases"] += p.grand_total
+            sup_map[sid]["purchase_count"] += 1
+
+        all_returns, _ = await self.purchase_return_repo.list_returns(
+            business_id=business_id, status=PurchaseReturnStatus.FINALIZED,
+        )
+
+        # Attribute returns to suppliers via purchase_id
+        for r in all_returns:
+            if r.created_at >= date_from and r.created_at <= date_to:
+                orig_purchase = await self.purchase_repo.get_purchase_by_id(r.purchase_id, business_id)
+                if orig_purchase and orig_purchase.supplier_id in sup_map:
+                    sup_map[orig_purchase.supplier_id]["purchase_returns"] += r.grand_total
+
+        suppliers = [PurchaseSupplierBreakdownItem(
+            supplier_id=v["supplier_id"], supplier_code=v["supplier_code"], supplier_name=v["supplier_name"],
+            gross_purchases=v["gross_purchases"], purchase_returns=v["purchase_returns"],
+            net_purchases=v["gross_purchases"] - v["purchase_returns"],
+            purchase_count=v["purchase_count"],
+        ) for v in sup_map.values()]
+        suppliers.sort(key=lambda x: (-x.net_purchases, x.supplier_name, x.supplier_id))
+
+        return PurchaseAnalyticsBySupplierResponse(
+            date_from=date_from, date_to=date_to,
+            gross_purchases=sum((s.gross_purchases for s in suppliers), Decimal("0")),
+            purchase_returns=sum((s.purchase_returns for s in suppliers), Decimal("0")),
+            net_purchases=sum((s.net_purchases for s in suppliers), Decimal("0")),
+            suppliers=suppliers,
+        )
+
+    async def get_purchase_analytics_by_category(
+        self,
+        business_id: str,
+        user_id: str,
+        date_from: datetime,
+        date_to: datetime,
+        category_id: Optional[str] = None,
+        supplier_id: Optional[str] = None,
+        branch_id: Optional[str] = None,
+    ) -> PurchaseAnalyticsByCategoryResponse:
+        await self._validate_access(business_id, user_id)
+        if date_from > date_to:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="date_from must be before or equal to date_to.")
+        await self._validate_analytics_entities(business_id, category_id, supplier_id, branch_id)
+
+        purchases, _ = await self.purchase_repo.list_purchases(
+            business_id=business_id, status=PurchaseStatus.FINALIZED,
+            supplier_id=supplier_id, branch_id=branch_id, page=1, page_size=10000,
+        )
+        filtered_purchases = [p for p in purchases if p.purchase_date >= date_from and p.purchase_date <= date_to]
+
+        cat_map: dict[str, dict] = {}
+        purchase_to_categories: dict[str, set] = {}
+
+        for p in filtered_purchases:
+            lines = await self.purchase_repo.list_lines_for_purchase(p.id)
+            cats_for_purchase: set = set()
+            for line in lines:
+                product = await self.product_repo.get_by_id(line.product_id, business_id)
+                if product and product.category_id:
+                    cid = product.category_id
+                    cats_for_purchase.add(cid)
+                    if cid not in cat_map:
+                        c = await self.category_repo.get_by_id(cid, business_id)
+                        cat_map[cid] = {
+                            "category_id": cid,
+                            "category_code": c.code if c else "UNKNOWN",
+                            "category_name": c.name if c else "Unknown",
+                            "gross_purchases": Decimal("0"),
+                            "purchase_returns": Decimal("0"),
+                            "net_purchases": Decimal("0"),
+                            "purchase_count": 0,
+                        }
+                    cat_map[cid]["gross_purchases"] += line.line_subtotal
+            purchase_to_categories[p.id] = cats_for_purchase
+            # Count purchase once per category it contains
+            for cid in cats_for_purchase:
+                if cid in cat_map:
+                    cat_map[cid]["purchase_count"] += 1
+
+        if category_id and category_id in cat_map:
+            cat_map = {category_id: cat_map[category_id]}
+            purchase_to_categories = {pid: cats for pid, cats in purchase_to_categories.items() if category_id in cats}
+
+        all_returns, _ = await self.purchase_return_repo.list_returns(
+            business_id=business_id, status=PurchaseReturnStatus.FINALIZED,
+        )
+
+        for r in all_returns:
+            if r.created_at >= date_from and r.created_at <= date_to:
+                orig_cats = purchase_to_categories.get(r.purchase_id, set())
+                for cid in orig_cats:
+                    if cid in cat_map:
+                        cat_map[cid]["purchase_returns"] += r.grand_total
+
+        categories = [PurchaseCategoryBreakdownItem(
+            category_id=v["category_id"], category_code=v["category_code"], category_name=v["category_name"],
+            gross_purchases=v["gross_purchases"], purchase_returns=v["purchase_returns"],
+            net_purchases=v["gross_purchases"] - v["purchase_returns"],
+            purchase_count=v["purchase_count"],
+        ) for v in cat_map.values()]
+        categories.sort(key=lambda x: (-x.net_purchases, x.category_name, x.category_id or ""))
+
+        return PurchaseAnalyticsByCategoryResponse(
+            date_from=date_from, date_to=date_to,
+            gross_purchases=sum((c.gross_purchases for c in categories), Decimal("0")),
+            purchase_returns=sum((c.purchase_returns for c in categories), Decimal("0")),
+            net_purchases=sum((c.net_purchases for c in categories), Decimal("0")),
+            categories=categories,
+        )
 
 
 purchase_service = PurchaseService()

@@ -56,6 +56,10 @@ class AbstractBusinessMembershipRepository(ABC):
     async def exists(self, business_id: str, user_id: str) -> bool:
         pass
 
+    @abstractmethod
+    async def delete_by_business(self, business_id: str) -> None:
+        pass
+
     @classmethod
     @abstractmethod
     def clear(cls):
@@ -147,6 +151,22 @@ class InMemoryBusinessMembershipRepository(AbstractBusinessMembershipRepository)
 
     async def exists(self, business_id: str, user_id: str) -> bool:
         return (business_id, user_id) in self._business_user_index
+
+    async def delete_by_business(self, business_id: str) -> None:
+        memberships_to_remove = [
+            m_id for m in self._memberships.values()
+            if m.business_id == business_id
+            for m_id in [m.id]
+        ]
+        for m_id in memberships_to_remove:
+            del self._memberships[m_id]
+        
+        keys_to_remove = [
+            k for k in self._business_user_index.keys()
+            if k[0] == business_id
+        ]
+        for k in keys_to_remove:
+            del self._business_user_index[k]
 
     @classmethod
     def clear(cls):

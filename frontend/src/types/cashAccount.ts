@@ -53,6 +53,7 @@ export interface CashMovementResponse {
   reference_id?: string | null;
   description?: string | null;
   performed_by_user_id: string;
+  shift_id?: string | null;
   status: string;
   created_at: string;
   updated_at: string;

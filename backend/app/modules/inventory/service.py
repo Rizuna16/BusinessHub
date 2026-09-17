@@ -131,6 +131,23 @@ class InventoryService:
 
         return membership
 
+    async def upsert_balance(
+        self,
+        business_id: str,
+        inventory_location_id: str,
+        product_id: str,
+        variant_id: Optional[str],
+        delta: Decimal,
+    ) -> None:
+        """Public wrapper for balance mutation. Used by PurchaseReturnService and other callers."""
+        await self.balance_repo.upsert_balance(
+            business_id=business_id,
+            inventory_location_id=inventory_location_id,
+            product_id=product_id,
+            variant_id=variant_id,
+            delta=delta,
+        )
+
     async def _validate_location(self, business_id: str, location_id: str) -> None:
         location = await self.location_repo.get_by_id(location_id)
         if (

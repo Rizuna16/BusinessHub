@@ -20,6 +20,7 @@ from app.modules.purchase_return.repository import InMemoryPurchaseReturnReposit
 from app.modules.sales.repository import InMemorySalesRepository
 from app.modules.cash_account.repository import InMemoryCashAccountRepository
 from app.modules.payment.repository import InMemoryPaymentRepository
+from app.modules.cashier_shift.repository import InMemoryCashierShiftRepository
 
 client = TestClient(app)
 
@@ -42,6 +43,7 @@ def clear_repositories():
     InMemoryBusinessRepository.clear()
     InMemoryAccountRepository.clear()
     InMemoryUserRepository.clear()
+    InMemoryCashierShiftRepository.clear()
     yield
     InMemoryPaymentRepository.clear()
     InMemoryCashAccountRepository.clear()
@@ -59,6 +61,7 @@ def clear_repositories():
     InMemoryBusinessRepository.clear()
     InMemoryAccountRepository.clear()
     InMemoryUserRepository.clear()
+    InMemoryCashierShiftRepository.clear()
 
 
 def register_user(email="owner@example.com", name="Owner Test"):
@@ -186,6 +189,12 @@ def setup_finalized_sales(token, biz_id, cust_id, br_id, prod_id, price=1000, qt
     loc_id = setup_warehouse_and_location(token, biz_id)
     add_opening_stock(token, biz_id, loc_id, prod_id, qty="1000")
 
+    client.put(
+        f"/api/v1/businesses/{biz_id}/customers/{cust_id}/credit/limit",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"credit_limit": "999999999.00"},
+    )
+
     s_res = client.post(
         f"/api/v1/businesses/{biz_id}/sales",
         headers={"Authorization": f"Bearer {token}"},
@@ -295,6 +304,21 @@ def setup_finalized_purchase(token, biz_id, sup_id, br_id, prod_id, price=1000, 
     return pur_id
 
 
+def open_shift(token, biz_id, branch_id, cash_account_id):
+    """Open a valid cashier shift for CASH payment tests."""
+    res = client.post(
+        f"/api/v1/businesses/{biz_id}/shifts",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "branch_id": branch_id,
+            "cash_account_id": cash_account_id,
+            "opening_balance": 0,
+        },
+    )
+    assert res.status_code == 201
+    return res.json()["id"]
+
+
 class TestPaymentEngineCore:
     def test_customer_payment_success_and_cash_posting(self):
         token, _ = register_user()
@@ -304,6 +328,7 @@ class TestPaymentEngineCore:
         unit_id = create_unit(token, biz_id)
         prod_id = create_product(token, biz_id, unit_id)
         cash_acc_id = create_cash_account(token, biz_id, opening_balance=1000)
+        shift_id = open_shift(token, biz_id, br_id, cash_acc_id)
 
         sales_id = setup_finalized_sales(token, biz_id, cust_id, br_id, prod_id, price=1000, qty=10) # 10,000
 
@@ -319,6 +344,7 @@ class TestPaymentEngineCore:
                 "currency": "IDR",
                 "payment_method": "CASH",
                 "cash_account_id": cash_acc_id,
+                "shift_id": shift_id,
             },
         )
         assert pay_res.status_code == 201
@@ -424,6 +450,7 @@ class TestPaymentEngineCore:
         unit_id = create_unit(token, biz_id)
         prod_id = create_product(token, biz_id, unit_id)
         cash_acc_id = create_cash_account(token, biz_id, opening_balance=0)
+        shift_id = open_shift(token, biz_id, br_id, cash_acc_id)
 
         sales_id = setup_finalized_sales(token, biz_id, cust_id, br_id, prod_id, price=1000, qty=10)
 
@@ -436,6 +463,7 @@ class TestPaymentEngineCore:
             "payment_method": "CASH",
             "cash_account_id": cash_acc_id,
             "idempotency_key": "UNIQUE-KEY-12345",
+            "shift_id": shift_id,
         }
 
         # First call
@@ -471,6 +499,7 @@ class TestPaymentEngineCore:
         unit_id = create_unit(token, biz_id)
         prod_id = create_product(token, biz_id, unit_id)
         cash_acc_id = create_cash_account(token, biz_id, opening_balance=5000)
+        shift_id = open_shift(token, biz_id, br_id, cash_acc_id)
 
         sales_id = setup_finalized_sales(token, biz_id, cust_id, br_id, prod_id, price=1000, qty=10)
 
@@ -485,6 +514,7 @@ class TestPaymentEngineCore:
                 "currency": "IDR",
                 "payment_method": "CASH",
                 "cash_account_id": cash_acc_id,
+                "shift_id": shift_id,
             },
         )
         p_id = pay_res.json()["id"]
@@ -657,6 +687,7 @@ class TestPaymentEngineCore:
         unit_id = create_unit(token, biz_id)
         prod_id = create_product(token, biz_id, unit_id)
         cash_id = create_cash_account(token, biz_id, opening_balance=20000)
+        shift_id = open_shift(token, biz_id, br_id, cash_id)
 
         # Purchase 10,000
         pur_id = setup_finalized_purchase(token, biz_id, sup_id, br_id, prod_id, price=1000, qty=10)
@@ -681,7 +712,7 @@ class TestPaymentEngineCore:
         res_over = client.post(
             f"/api/v1/businesses/{biz_id}/payments",
             headers={"Authorization": f"Bearer {token}"},
-            json={"direction": "SUPPLIER_OUT", "target_type": "PURCHASE", "target_id": pur_id, "amount": 8000, "currency": "IDR", "payment_method": "CASH", "cash_account_id": cash_id}
+            json={"direction": "SUPPLIER_OUT", "target_type": "PURCHASE", "target_id": pur_id, "amount": 8000, "currency": "IDR", "payment_method": "CASH", "cash_account_id": cash_id, "shift_id": shift_id}
         )
         assert res_over.status_code == 400
         assert "exceeds remaining outstanding" in res_over.json()["message"]
@@ -690,7 +721,7 @@ class TestPaymentEngineCore:
         res_ok = client.post(
             f"/api/v1/businesses/{biz_id}/payments",
             headers={"Authorization": f"Bearer {token}"},
-            json={"direction": "SUPPLIER_OUT", "target_type": "PURCHASE", "target_id": pur_id, "amount": 7000, "currency": "IDR", "payment_method": "CASH", "cash_account_id": cash_id}
+            json={"direction": "SUPPLIER_OUT", "target_type": "PURCHASE", "target_id": pur_id, "amount": 7000, "currency": "IDR", "payment_method": "CASH", "cash_account_id": cash_id, "shift_id": shift_id}
         )
         assert res_ok.status_code == 201
 

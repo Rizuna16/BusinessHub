@@ -221,3 +221,55 @@ class SalesListResponse(BaseModel):
     page: int
     page_size: int
     total: int
+
+
+# --- Sales Analytics Schemas ---
+
+class SalesAnalyticsSummaryResponse(BaseModel):
+    date_from: datetime
+    date_to: datetime
+    gross_sales: Decimal
+    sales_returns: Decimal
+    net_sales: Decimal
+    discount_total: Decimal
+    tax_total: Decimal
+    transaction_count: int
+    average_transaction_value: Decimal
+
+
+class SalesCategoryBreakdownItem(BaseModel):
+    category_id: Optional[str] = None
+    category_code: str
+    category_name: str
+    gross_sales: Decimal
+    sales_returns: Decimal
+    net_sales: Decimal
+    transaction_count: int
+
+
+class SalesAnalyticsByCategoryResponse(BaseModel):
+    date_from: datetime
+    date_to: datetime
+    gross_sales: Decimal
+    sales_returns: Decimal
+    net_sales: Decimal
+    categories: List[SalesCategoryBreakdownItem]
+
+
+class SalesCustomerBreakdownItem(BaseModel):
+    customer_id: Optional[str] = None
+    customer_code: str
+    customer_name: str
+    gross_sales: Decimal
+    sales_returns: Decimal
+    net_sales: Decimal
+    transaction_count: int
+
+
+class SalesAnalyticsByCustomerResponse(BaseModel):
+    date_from: datetime
+    date_to: datetime
+    gross_sales: Decimal
+    sales_returns: Decimal
+    net_sales: Decimal
+    customers: List[SalesCustomerBreakdownItem]

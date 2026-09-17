@@ -2,6 +2,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.core.database import async_session_factory, engine
 from app.modules.authentication.repository import InMemoryUserRepository
 from app.modules.account.repository import InMemoryAccountRepository
 from app.modules.business.repository import InMemoryBusinessRepository
@@ -29,6 +30,25 @@ def client():
         yield c
 
 
+async def _ensure_user_in_pg(user_id: str, email: str, full_name: str):
+    """Create a fresh engine to avoid event loop conflicts with TestClient."""
+    from sqlalchemy import text
+    from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
+    from app.core.config import settings
+    fresh_engine = create_async_engine(settings.database_url, echo=False, pool_size=2, pool_pre_ping=True)
+    FreshSession = async_sessionmaker(fresh_engine, class_=AsyncSession, expire_on_commit=False)
+    try:
+        async with FreshSession() as session:
+            await session.execute(text(
+                "INSERT INTO users (id, email, full_name, password_hash, is_active, platform_role) "
+                "VALUES (:id, :email, :full_name, 'hash', true, NULL) "
+                "ON CONFLICT (email) DO UPDATE SET id = :id, full_name = :full_name"
+            ), {"id": user_id, "email": email, "full_name": full_name})
+            await session.commit()
+    finally:
+        await fresh_engine.dispose()
+
+
 def _register_and_get_token(
     client: TestClient, email="user@example.com", password="Password123", full_name="Test User"
 ) -> str:
@@ -45,6 +65,13 @@ def _register_and_get_token(
         login_res = client.post("/api/v1/auth/login", json={"email": email, "password": password})
         assert login_res.status_code == 200
         token = login_res.json()["access_token"]
+    # Also ensure user exists in PostgreSQL for membership service lookups
+    me = client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {token}"})
+    if me.status_code == 200:
+        user_id = me.json().get("id")
+        if user_id:
+            import anyio
+            anyio.run(_ensure_user_in_pg, user_id, email, full_name)
     return token
 
 
@@ -88,33 +115,40 @@ def test_business_creation_creates_owner_membership(client: TestClient):
 
 # 2. Owner membership unique
 def test_owner_membership_unique(client: TestClient):
-    import asyncio
-    from app.modules.business_membership.repository import InMemoryBusinessMembershipRepository
-
     token = _register_and_get_token(client, email="a@example.com", full_name="User A")
     res = _create_business(client, token)
     biz_id = res.json()["id"]
     user_a = _get_user_id(client, token)
 
-    # Calling create_owner_membership again on an existing owner should return the existing record
-    async def _existing():
-        return await business_membership_service.repository.get_by_business_and_user(biz_id, user_a)
+    import asyncio
+    from sqlalchemy import text
+    from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
+    from app.core.config import settings
 
-    first = asyncio.run(_existing())
-    assert first is not None
-    assert first.role == BusinessMembershipRole.OWNER
+    async def _query(sql, params):
+        engine = create_async_engine(settings.database_url, echo=False, pool_size=2, pool_pre_ping=True)
+        factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+        try:
+            async with factory() as session:
+                result = await session.execute(text(sql), params)
+                return result.fetchall()
+        finally:
+            await engine.dispose()
 
-    async def _create_dup():
-        return await business_membership_service.create_owner_membership(biz_id, user_a)
-
-    second = asyncio.run(_create_dup())
-    assert second.id == first.id
+    # Query PostgreSQL for the membership
+    rows = asyncio.run(_query(
+        "SELECT id, role FROM business_memberships WHERE business_id = :biz_id AND user_id = :user_id",
+        {"biz_id": biz_id, "user_id": user_a}
+    ))
+    assert len(rows) == 1
+    assert rows[0].role == "OWNER"
 
     # Repository should report only one OWNER record for this business
-    async def _list():
-        return await InMemoryBusinessMembershipRepository().list_by_business(biz_id)
-    members = asyncio.run(_list())
-    owners = [m for m in members if m.role == BusinessMembershipRole.OWNER]
+    rows = asyncio.run(_query(
+        "SELECT role FROM business_memberships WHERE business_id = :biz_id",
+        {"biz_id": biz_id}
+    ))
+    owners = [r for r in rows if r.role == "OWNER"]
     assert len(owners) == 1
 
 

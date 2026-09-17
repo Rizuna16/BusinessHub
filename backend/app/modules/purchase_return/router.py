@@ -1,7 +1,10 @@
 from typing import List, Optional
 from fastapi import APIRouter, Depends, Path, Query, status
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.core.database import get_db_session
+from app.core.container import RepositoryContainer
 from app.modules.authentication.router import get_current_user
 from app.modules.authentication.schemas import UserResponse
 from app.modules.purchase_return.schemas import (
@@ -18,6 +21,10 @@ from app.modules.purchase_return.service import (
     PurchaseReturnService,
     purchase_return_service,
 )
+from app.modules.business_membership.service import BusinessMembershipService
+from app.modules.accounting.integration import AccountingIntegrationService
+from app.modules.accounting.service import AccountingService
+from app.modules.inventory.service import InventoryService
 
 router = APIRouter(
     prefix=settings.api_v1_prefix + "/businesses/{business_id}/purchase-returns",
@@ -29,12 +36,48 @@ def get_purchase_return_service() -> PurchaseReturnService:
     return purchase_return_service
 
 
+async def get_scoped_purchase_return_service(
+    session: AsyncSession = Depends(get_db_session),
+) -> PurchaseReturnService:
+    """
+    Request-scoped PurchaseReturnService wired to the same AsyncSession for transaction boundary.
+    """
+    container = RepositoryContainer(session)
+    membership_svc = BusinessMembershipService(
+        repository=container.business_membership,
+        user_repo=container.user,
+        account_repo=container.account,
+        business_repo=container.business,
+    )
+    inv_svc = InventoryService(
+        balance_repo=container.stock_balance,
+        movement_repo=container.stock_movement,
+        cost_repo=container.inventory_cost,
+    )
+    acct_svc = AccountingService(
+        repository=container.accounting,
+        membership_service=membership_svc,
+        branch_repo=container.branch,
+    )
+    acct_int = AccountingIntegrationService(accounting_srv=acct_svc)
+    return PurchaseReturnService(
+        return_repo=container.purchase_return,
+        membership_service=membership_svc,
+        purchase_repo=container.purchase,
+        receiving_repo=container.receiving,
+        location_repo=container.inventory_location,
+        accounting_integration=acct_int,
+        inv_service=inv_svc,
+        session=session,
+    )
+
+
 @router.post("", response_model=PurchaseReturnResponse, status_code=status.HTTP_201_CREATED)
 async def create_return(
     payload: PurchaseReturnCreate,
     business_id: str = Path(...),
     current_user: UserResponse = Depends(get_current_user),
-    service: PurchaseReturnService = Depends(get_purchase_return_service),
+    service: PurchaseReturnService = Depends(get_scoped_purchase_return_service),
 ) -> PurchaseReturnResponse:
     """
     Create a new purchase return in DRAFT status for a FINALIZED purchase.
@@ -57,7 +100,7 @@ async def list_returns(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     current_user: UserResponse = Depends(get_current_user),
-    service: PurchaseReturnService = Depends(get_purchase_return_service),
+    service: PurchaseReturnService = Depends(get_scoped_purchase_return_service),
 ) -> PurchaseReturnListResponse:
     """
     List purchase returns for a business with optional filtering and pagination.
@@ -80,7 +123,7 @@ async def get_return(
     business_id: str = Path(...),
     return_id: str = Path(...),
     current_user: UserResponse = Depends(get_current_user),
-    service: PurchaseReturnService = Depends(get_purchase_return_service),
+    service: PurchaseReturnService = Depends(get_scoped_purchase_return_service),
 ) -> PurchaseReturnResponse:
     """
     Get detailed information of a purchase return including all lines.
@@ -99,7 +142,7 @@ async def update_return(
     business_id: str = Path(...),
     return_id: str = Path(...),
     current_user: UserResponse = Depends(get_current_user),
-    service: PurchaseReturnService = Depends(get_purchase_return_service),
+    service: PurchaseReturnService = Depends(get_scoped_purchase_return_service),
 ) -> PurchaseReturnResponse:
     """
     Update notes of a DRAFT purchase return.
@@ -118,7 +161,7 @@ async def delete_return(
     business_id: str = Path(...),
     return_id: str = Path(...),
     current_user: UserResponse = Depends(get_current_user),
-    service: PurchaseReturnService = Depends(get_purchase_return_service),
+    service: PurchaseReturnService = Depends(get_scoped_purchase_return_service),
 ) -> dict:
     """
     Delete a DRAFT purchase return.
@@ -137,7 +180,7 @@ async def add_return_line(
     business_id: str = Path(...),
     return_id: str = Path(...),
     current_user: UserResponse = Depends(get_current_user),
-    service: PurchaseReturnService = Depends(get_purchase_return_service),
+    service: PurchaseReturnService = Depends(get_scoped_purchase_return_service),
 ) -> PurchaseReturnLineResponse:
     """
     Add a line to a DRAFT purchase return.
@@ -159,7 +202,7 @@ async def update_return_line(
     return_id: str = Path(...),
     line_id: str = Path(...),
     current_user: UserResponse = Depends(get_current_user),
-    service: PurchaseReturnService = Depends(get_purchase_return_service),
+    service: PurchaseReturnService = Depends(get_scoped_purchase_return_service),
 ) -> PurchaseReturnLineResponse:
     """
     Update a line in a DRAFT purchase return.
@@ -181,7 +224,7 @@ async def delete_return_line(
     return_id: str = Path(...),
     line_id: str = Path(...),
     current_user: UserResponse = Depends(get_current_user),
-    service: PurchaseReturnService = Depends(get_purchase_return_service),
+    service: PurchaseReturnService = Depends(get_scoped_purchase_return_service),
 ) -> dict:
     """
     Delete a line from a DRAFT purchase return.
@@ -200,7 +243,7 @@ async def finalize_return(
     business_id: str = Path(...),
     return_id: str = Path(...),
     current_user: UserResponse = Depends(get_current_user),
-    service: PurchaseReturnService = Depends(get_purchase_return_service),
+    service: PurchaseReturnService = Depends(get_scoped_purchase_return_service),
 ) -> PurchaseReturnResponse:
     """
     Finalize a DRAFT purchase return.
@@ -220,7 +263,7 @@ async def cancel_return(
     business_id: str = Path(...),
     return_id: str = Path(...),
     current_user: UserResponse = Depends(get_current_user),
-    service: PurchaseReturnService = Depends(get_purchase_return_service),
+    service: PurchaseReturnService = Depends(get_scoped_purchase_return_service),
 ) -> PurchaseReturnResponse:
     """
     Cancel a DRAFT purchase return.

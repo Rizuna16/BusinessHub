@@ -255,6 +255,23 @@ class StockOpnameService:
         lines_snapshot = [l.model_copy() for l in self.inv_service.movement_repo._lines]
 
         try:
+            # ── RESERVATION CONFLICT CHECK for negative adjustments ──
+            from app.modules.sales_order.availability import availability_service, _inventory_lock
+            _inventory_lock.acquire()
+            try:
+                for line in lines:
+                    if line.variance is not None and line.variance < Decimal("0"):
+                        physical_qty = await self.inv_service.get_physical_quantity(business_id, line.product_id, line.variant_id)
+                        reserved_qty = await availability_service.get_all_reservations_for_product(business_id, line.product_id, line.variant_id)
+                        new_physical = physical_qty + line.variance  # variance is negative
+                        if new_physical < reserved_qty:
+                            raise HTTPException(
+                                status_code=status.HTTP_400_BAD_REQUEST,
+                                detail=f"Reservation conflict for product {line.product_id}: opname would reduce physical stock ({new_physical}) below active reservations ({reserved_qty}). Resolve reservation conflicts first.",
+                            )
+            finally:
+                _inventory_lock.release()
+
             for line in lines:
                 if line.variance is None or line.variance == Decimal("0"):
                     pass

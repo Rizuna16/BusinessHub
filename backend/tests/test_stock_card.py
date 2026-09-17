@@ -183,7 +183,9 @@ def create_customer(token, biz_id, name="Cust A"):
         json={"name": name, "customer_type": "ORGANIZATION"},
     )
     assert res.status_code == 201
-    return res.json()["id"]
+    cid = res.json()["id"]
+    client.put(f"/api/v1/businesses/{biz_id}/customers/{cid}/credit/limit", headers={"Authorization": f"Bearer {token}"}, json={"credit_limit": "100000000.00"})
+    return cid
 
 
 def create_supplier(token, biz_id, name="Supp A"):

@@ -28,5 +28,15 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     jwt_expire_minutes: int = 10
 
+    dev_seed_email: str = "dev@businesshub.dev"
+    dev_seed_password: str = "DevSeedPass123!"
+    dev_seed_name: str = "Development Owner"
+
+    dev_seed_superadmin_email: str = "superadmin@businesshub.dev"
+    dev_seed_superadmin_password: str = "SuperAdminPass123!"
+    dev_seed_superadmin_name: str = "Platform Super Admin"
+
+    database_url: str = ""
+
 
 settings = Settings()

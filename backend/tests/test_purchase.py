@@ -15,6 +15,47 @@ from app.modules.product.repository import InMemoryProductRepository
 from app.modules.product_variant.repository import InMemoryProductVariantRepository
 from app.modules.purchase.repository import InMemoryPurchaseRepository
 
+# Override production PostgreSQL router wiring with InMemory services
+from app.modules.purchase.router import get_scoped_purchase_service
+from app.modules.business.router import get_scoped_business_service
+from app.modules.business_membership.router import get_scoped_membership_service
+from app.modules.purchase.service import PurchaseService
+from app.modules.business_membership.service import BusinessMembershipService
+from app.modules.business.service import BusinessService
+from app.modules.subscription.service import SubscriptionService
+
+
+def _inmemory_purchase_service():
+    """InMemory-wired PurchaseService for unit testing."""
+    membership_svc = BusinessMembershipService()
+    return PurchaseService(
+        membership_service=membership_svc,
+    )
+
+
+def _inmemory_business_service():
+    """InMemory-wired BusinessService for unit testing."""
+    membership_svc = BusinessMembershipService()
+    subscription_svc = SubscriptionService()
+    return BusinessService(membership_service=membership_svc, subscription_service_instance=subscription_svc)
+
+
+def _inmemory_membership_service():
+    """InMemory-wired BusinessMembershipService for unit testing."""
+    return BusinessMembershipService()
+
+
+@pytest.fixture(autouse=True)
+def setup_test_environment():
+    """Override production scoped services with InMemory for unit tests."""
+    app.dependency_overrides[get_scoped_purchase_service] = _inmemory_purchase_service
+    app.dependency_overrides[get_scoped_business_service] = _inmemory_business_service
+    app.dependency_overrides[get_scoped_membership_service] = _inmemory_membership_service
+    yield
+    app.dependency_overrides.pop(get_scoped_purchase_service, None)
+    app.dependency_overrides.pop(get_scoped_business_service, None)
+    app.dependency_overrides.pop(get_scoped_membership_service, None)
+
 client = TestClient(app)
 
 
@@ -157,6 +198,24 @@ def create_variant(token, business_id, product_id, name="Variant Red", code="VAR
     )
     assert res.status_code == 201
     return res.json()["id"]
+
+
+def create_warehouse_and_location(token, business_id, wh_name="WH 1", loc_name="LOC 1"):
+    wh_res = client.post(
+        f"/api/v1/businesses/{business_id}/warehouses",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": wh_name, "code": wh_name.replace(" ", "-").upper()},
+    )
+    assert wh_res.status_code == 201
+    wh_id = wh_res.json()["id"]
+
+    loc_res = client.post(
+        f"/api/v1/businesses/{business_id}/warehouses/{wh_id}/locations",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": loc_name, "code": loc_name.replace(" ", "-").upper(), "location_type": "RECEIVING"},
+    )
+    assert loc_res.status_code == 201
+    return wh_res.json()["id"], loc_res.json()["id"]
 
 
 class TestPurchaseFeature:
@@ -364,6 +423,7 @@ class TestPurchaseFeature:
         br_id = create_branch(token, biz_id)
         unit_id = create_unit(token, biz_id)
         prod_id = create_product(token, biz_id, unit_id)
+        wh_id, loc_id = create_warehouse_and_location(token, biz_id)
 
         p_res = client.post(
             f"/api/v1/businesses/{biz_id}/purchases",

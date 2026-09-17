@@ -17,6 +17,56 @@ from app.modules.purchase.repository import InMemoryPurchaseRepository
 from app.modules.receiving.repository import InMemoryReceivingRepository
 from app.modules.purchase_return.repository import InMemoryPurchaseReturnRepository
 
+# Override production PostgreSQL router wiring with InMemory services
+from app.modules.purchase.router import get_scoped_purchase_service
+from app.modules.receiving.router import get_scoped_receiving_service
+from app.modules.purchase_return.router import get_scoped_purchase_return_service
+from app.modules.business.router import get_scoped_business_service
+from app.modules.business_membership.router import get_scoped_membership_service
+from app.modules.purchase.service import PurchaseService
+from app.modules.receiving.service import ReceivingService
+from app.modules.purchase_return.service import PurchaseReturnService
+from app.modules.business_membership.service import BusinessMembershipService
+from app.modules.business.service import BusinessService
+from app.modules.subscription.service import SubscriptionService
+
+
+def _inmemory_purchase_service():
+    return PurchaseService(membership_service=BusinessMembershipService())
+
+
+def _inmemory_receiving_service():
+    return ReceivingService(membership_service=BusinessMembershipService())
+
+
+def _inmemory_purchase_return_service():
+    return PurchaseReturnService(membership_service=BusinessMembershipService())
+
+
+def _inmemory_business_service():
+    membership_svc = BusinessMembershipService()
+    subscription_svc = SubscriptionService()
+    return BusinessService(membership_service=membership_svc, subscription_service_instance=subscription_svc)
+
+
+def _inmemory_membership_service():
+    return BusinessMembershipService()
+
+
+@pytest.fixture(autouse=True)
+def setup_test_environment():
+    app.dependency_overrides[get_scoped_purchase_service] = _inmemory_purchase_service
+    app.dependency_overrides[get_scoped_receiving_service] = _inmemory_receiving_service
+    app.dependency_overrides[get_scoped_purchase_return_service] = _inmemory_purchase_return_service
+    app.dependency_overrides[get_scoped_business_service] = _inmemory_business_service
+    app.dependency_overrides[get_scoped_membership_service] = _inmemory_membership_service
+    yield
+    app.dependency_overrides.pop(get_scoped_purchase_service, None)
+    app.dependency_overrides.pop(get_scoped_receiving_service, None)
+    app.dependency_overrides.pop(get_scoped_purchase_return_service, None)
+    app.dependency_overrides.pop(get_scoped_business_service, None)
+    app.dependency_overrides.pop(get_scoped_membership_service, None)
+
 client = TestClient(app)
 
 
@@ -128,7 +178,9 @@ def create_product(token, business_id, unit_id, name="Product A", code="PROD-A")
     return res.json()["id"]
 
 
-def create_warehouse(token, business_id, name="Warehouse A", code="WH-A"):
+def create_warehouse(token, business_id, name="Warehouse A"):
+    import uuid
+    code = f"WH-{uuid.uuid4().hex[:8]}"
     res = client.post(
         f"/api/v1/businesses/{business_id}/warehouses",
         headers={"Authorization": f"Bearer {token}"},
@@ -146,6 +198,7 @@ def create_warehouse(token, business_id, name="Warehouse A", code="WH-A"):
 
 
 def setup_finalized_purchase_with_lines(token, biz_id, sup_id, br_id, prod_id, lines=None):
+    wh_id, loc_id = create_warehouse(token, biz_id)
     p_res = client.post(
         f"/api/v1/businesses/{biz_id}/purchases",
         headers={"Authorization": f"Bearer {token}"},
@@ -196,6 +249,7 @@ class TestPurchasePayableCoreFunctionality:
         br_id = create_branch(token, biz_id)
         unit_id = create_unit(token, biz_id)
         prod_id = create_product(token, biz_id, unit_id)
+        wh_id, loc_id = create_warehouse(token, biz_id)
 
         # Create but DRAFT purchase
         p_res = client.post(

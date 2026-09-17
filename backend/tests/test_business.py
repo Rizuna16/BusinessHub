@@ -18,6 +18,37 @@ def clear_repos():
     InMemoryBusinessRepository.clear()
 
 
+@pytest.fixture(autouse=True)
+def clean_business_names():
+    """Clean up businesses with fixed names used in slug tests to ensure test isolation."""
+    import asyncio
+    from sqlalchemy import text
+    from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
+    from app.core.config import settings
+
+    fixed_names = ["My Cool Business", "My Biz"]
+
+    async def _clean():
+        engine = create_async_engine(settings.database_url, echo=False, pool_size=2, pool_pre_ping=True)
+        factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+        try:
+            async with factory() as session:
+                for name in fixed_names:
+                    await session.execute(
+                        text("DELETE FROM business_memberships WHERE business_id IN (SELECT id FROM businesses WHERE name = :name)"),
+                        {"name": name}
+                    )
+                    await session.execute(
+                        text("DELETE FROM businesses WHERE name = :name"),
+                        {"name": name}
+                    )
+                await session.commit()
+        finally:
+            await engine.dispose()
+
+    asyncio.run(_clean())
+
+
 @pytest.fixture
 def client():
     with TestClient(app) as c:
@@ -356,7 +387,7 @@ def test_archive_own_business(client: TestClient):
     assert data["status"] == "archived"
 
 
-# 23. archive is soft delete (data remains)
+# 23. archive is soft delete (data remains) but tenant access is blocked per Feature #52
 def test_archive_is_soft_delete(client: TestClient):
     token = _register_and_get_token(client)
     create_res = _create_business(client, token, name="Soft Delete Biz")
@@ -364,11 +395,14 @@ def test_archive_is_soft_delete(client: TestClient):
     
     client.delete(f"/api/v1/businesses/{biz_id}", headers={"Authorization": f"Bearer {token}"})
     
-    # Business still exists - can be retrieved
+    # Feature #52: archived business blocks tenant access
     res = client.get(f"/api/v1/businesses/{biz_id}", headers={"Authorization": f"Bearer {token}"})
-    assert res.status_code == 200
-    assert res.json()["status"] == "archived"
-    assert res.json()["name"] == "Soft Delete Biz"
+    assert res.status_code == 403
+    
+    # Business still not in active list
+    res_list = client.get("/api/v1/businesses", headers={"Authorization": f"Bearer {token}"})
+    assert res_list.status_code == 200
+    assert len(res_list.json()) == 0
 
 
 # 24. archived business not in active list

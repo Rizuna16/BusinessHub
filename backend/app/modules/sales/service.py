@@ -662,6 +662,16 @@ class SalesService:
 
         await self._recalculate_totals(business_id, sales_id)
 
+        s_recalc = await self.sales_repo.get_sales_by_id(sales_id, business_id)
+        if s_recalc and s_recalc.customer_id:
+            from app.modules.customer_credit.service import customer_credit_service
+            await customer_credit_service.check_credit_limit_for_sales(
+                business_id=business_id,
+                customer_id=s_recalc.customer_id,
+                sales_grand_total=s_recalc.grand_total,
+                sales_id=sales_id,
+            )
+
         # Freeze TaxSnapshot for each line
         tc = await accounting_repository.get_tax_config_by_business(business_id)
         pricing_mode_val = tc.pricing_mode.value if tc else "TAX_EXCLUSIVE"

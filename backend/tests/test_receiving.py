@@ -1,4 +1,5 @@
 import pytest
+import uuid
 from decimal import Decimal
 from fastapi.testclient import TestClient
 from datetime import datetime, timezone
@@ -17,6 +18,65 @@ from app.modules.purchase.repository import InMemoryPurchaseRepository
 from app.modules.warehouse.repository import InMemoryWarehouseRepository, InMemoryInventoryLocationRepository
 from app.modules.inventory.repository import InMemoryStockBalanceRepository, InMemoryStockMovementRepository, InMemoryInventoryCostRepository
 from app.modules.receiving.repository import InMemoryReceivingRepository
+
+# Override production PostgreSQL router wiring with InMemory services
+from app.modules.receiving.router import get_scoped_receiving_service
+from app.modules.purchase.router import get_scoped_purchase_service
+from app.modules.purchase_return.router import get_scoped_purchase_return_service
+from app.modules.business.router import get_scoped_business_service
+from app.modules.business_membership.router import get_scoped_membership_service
+from app.modules.receiving.service import ReceivingService
+from app.modules.purchase.service import PurchaseService
+from app.modules.purchase_return.service import PurchaseReturnService
+from app.modules.business_membership.service import BusinessMembershipService
+from app.modules.business.service import BusinessService
+from app.modules.subscription.service import SubscriptionService
+
+
+def _inmemory_receiving_service():
+    """InMemory-wired ReceivingService for unit testing."""
+    membership_svc = BusinessMembershipService()
+    return ReceivingService(membership_service=membership_svc)
+
+
+def _inmemory_purchase_service():
+    """InMemory-wired PurchaseService for unit testing."""
+    membership_svc = BusinessMembershipService()
+    return PurchaseService(membership_service=membership_svc)
+
+
+def _inmemory_purchase_return_service():
+    """InMemory-wired PurchaseReturnService for unit testing."""
+    membership_svc = BusinessMembershipService()
+    return PurchaseReturnService(membership_service=membership_svc)
+
+
+def _inmemory_business_service():
+    """InMemory-wired BusinessService for unit testing."""
+    membership_svc = BusinessMembershipService()
+    subscription_svc = SubscriptionService()
+    return BusinessService(membership_service=membership_svc, subscription_service_instance=subscription_svc)
+
+
+def _inmemory_membership_service():
+    """InMemory-wired BusinessMembershipService for unit testing."""
+    return BusinessMembershipService()
+
+
+@pytest.fixture(autouse=True)
+def setup_test_environment():
+    """Override production scoped services with InMemory for unit tests."""
+    app.dependency_overrides[get_scoped_receiving_service] = _inmemory_receiving_service
+    app.dependency_overrides[get_scoped_purchase_service] = _inmemory_purchase_service
+    app.dependency_overrides[get_scoped_purchase_return_service] = _inmemory_purchase_return_service
+    app.dependency_overrides[get_scoped_business_service] = _inmemory_business_service
+    app.dependency_overrides[get_scoped_membership_service] = _inmemory_membership_service
+    yield
+    app.dependency_overrides.pop(get_scoped_receiving_service, None)
+    app.dependency_overrides.pop(get_scoped_purchase_service, None)
+    app.dependency_overrides.pop(get_scoped_purchase_return_service, None)
+    app.dependency_overrides.pop(get_scoped_business_service, None)
+    app.dependency_overrides.pop(get_scoped_membership_service, None)
 
 client = TestClient(app)
 
@@ -136,7 +196,9 @@ def create_product(token, business_id, unit_id, name="Product A", code="PROD-A",
     return res.json()["id"]
 
 
-def setup_warehouse_and_location(token, business_id, name="WH 1", code="WH-1", loc_name="RACK 1", loc_code="R1", status="ACTIVE"):
+def setup_warehouse_and_location(token, business_id, name="WH 1", code=None, loc_name="RACK 1", loc_code=None, status="ACTIVE"):
+    if code is None:
+        code = f"WH-{str(uuid.uuid4())[:8]}"
     wh_res = client.post(
         f"/api/v1/businesses/{business_id}/warehouses",
         headers={"Authorization": f"Bearer {token}"},
@@ -145,6 +207,8 @@ def setup_warehouse_and_location(token, business_id, name="WH 1", code="WH-1", l
     assert wh_res.status_code == 201
     wh_id = wh_res.json()["id"]
 
+    if loc_code is None:
+        loc_code = f"R-{str(uuid.uuid4())[:8]}"
     loc_res = client.post(
         f"/api/v1/businesses/{business_id}/warehouses/{wh_id}/locations",
         headers={"Authorization": f"Bearer {token}"},
@@ -307,6 +371,7 @@ class TestReceivingFeature:
         br_id = create_branch(token, biz_id)
         unit_id = create_unit(token, biz_id)
         prod_id = create_product(token, biz_id, unit_id)
+        loc_id = setup_warehouse_and_location(token, biz_id)
         pur_id, _ = create_finalized_purchase(token, biz_id, sup_id, br_id, prod_id)
 
         res = client.post(
@@ -324,7 +389,8 @@ class TestReceivingFeature:
         br_id = create_branch(token, biz_id)
         unit_id = create_unit(token, biz_id)
         prod_id = create_product(token, biz_id, unit_id)
-        archived_loc_id = setup_warehouse_and_location(token, biz_id, status="ARCHIVED")
+        loc_id = setup_warehouse_and_location(token, biz_id)
+        archived_loc_id = setup_warehouse_and_location(token, biz_id, loc_name="Archived Rack", loc_code="AR1", status="ARCHIVED")
         pur_id, _ = create_finalized_purchase(token, biz_id, sup_id, br_id, prod_id)
 
         res = client.post(
@@ -342,6 +408,7 @@ class TestReceivingFeature:
         br_a = create_branch(token_a, biz_a)
         unit_a = create_unit(token_a, biz_a)
         prod_a = create_product(token_a, biz_a, unit_a)
+        loc_a_id = setup_warehouse_and_location(token_a, biz_a)
         pur_a_id, _ = create_finalized_purchase(token_a, biz_a, sup_a, br_a, prod_a)
 
         token_b, _ = register_user("b@test.com")

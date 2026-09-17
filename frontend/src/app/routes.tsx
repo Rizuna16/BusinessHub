@@ -27,6 +27,7 @@ import { Customers } from '@/pages/Customers';
 import { Suppliers } from '@/pages/Suppliers';
 import { Purchases } from '@/pages/Purchases';
 import { PurchaseDetail } from '@/pages/PurchaseDetail';
+import { PurchaseAnalytics } from '@/pages/PurchaseAnalytics';
 import { Receivings } from '@/pages/Receivings';
 import { ReceivingDetail } from '@/pages/ReceivingDetail';
 import { PurchaseReturns } from '@/pages/PurchaseReturns';
@@ -37,6 +38,10 @@ import { SupplierCatalog } from '@/pages/SupplierCatalog';
 import { SupplierCatalogDetail } from '@/pages/SupplierCatalogDetail';
 import { Sales } from '@/pages/Sales';
 import { SalesDetail } from '@/pages/SalesDetail';
+import { SalesAnalytics } from '@/pages/SalesAnalytics';
+import { SalesCheckout } from '@/pages/SalesCheckout';
+import { Shifts } from '@/pages/Shifts';
+import { ShiftDetail } from '@/pages/ShiftDetail';
 import { SalesReturns } from '@/pages/SalesReturns';
 import { SalesReturnDetail } from '@/pages/SalesReturnDetail';
 import { Receivables } from '@/pages/Receivables';
@@ -47,8 +52,10 @@ import { CashAccounts } from '@/pages/CashAccounts';
 import { CashAccountDetail } from '@/pages/CashAccountDetail';
 import { Expenses } from '@/pages/Expenses';
 import { ExpenseDetail } from '@/pages/ExpenseDetail';
+import { ExpenseAnalytics } from '@/pages/ExpenseAnalytics';
 import { Payments } from '@/pages/Payments';
 import { PaymentDetail } from '@/pages/PaymentDetail';
+import { PaymentAnalytics } from '@/pages/PaymentAnalytics';
 import { ChartOfAccounts } from '@/pages/ChartOfAccounts';
 import { AccountingJournals } from '@/pages/AccountingJournals';
 import { AccountingJournalDetail } from '@/pages/AccountingJournalDetail';
@@ -58,8 +65,30 @@ import { AccountingProfitAndLoss } from '@/pages/AccountingProfitAndLoss';
 import { AccountingBalanceSheet } from '@/pages/AccountingBalanceSheet';
 import { TaxConfiguration } from '@/pages/TaxConfiguration';
 import { TaxSummary } from '@/pages/TaxSummary';
+import { ProductProfitability } from '@/pages/ProductProfitability';
+import OperationalDashboard from '@/pages/OperationalDashboard';
 import NotFound from '@/pages/NotFound';
+
+import { PlatformProtectedRoute } from '@/components/platform/PlatformProtectedRoute';
+import { PlatformShell } from '@/components/platform/PlatformShell';
+import { PlatformDashboardPage } from '@/pages/platform/PlatformDashboard';
+import { PlatformBusinessesPage } from '@/pages/platform/PlatformBusinesses';
+import { PlatformBusinessDetailPage } from '@/pages/platform/PlatformBusinessDetail';
+import { PlatformSubscriptionsPage } from '@/pages/platform/PlatformSubscriptions';
+import { NotificationList } from '@/components/NotificationList';
+import { PlatformUsersPage } from '@/pages/platform/PlatformUsers';
+import { PlatformAuditLogsPage } from '@/pages/platform/PlatformAuditLogs';
+import { DeliveryNotes } from '@/pages/DeliveryNotes';
+import { DeliveryNoteDetail } from '@/pages/DeliveryNoteDetail';
+import { PrintSalesCheckout } from '@/pages/print/PrintSalesCheckout';
+import { PrintSalesOrder } from '@/pages/print/PrintSalesOrder';
+import { PrintDeliveryNote } from '@/pages/print/PrintDeliveryNote';
+import { PrintPurchase } from '@/pages/print/PrintPurchase';
+import { PrintCustomerStatement } from '@/pages/print/PrintCustomerStatement';
+import { PrintFinancialReport } from '@/pages/print/PrintFinancialReport';
+
 import { ProtectedRoute, PublicOnlyRoute } from '@/components/ProtectedRoute';
+import { AppShell } from '@/components/layout/AppShell';
 
 const RouteConstants = {
   HOME: '/',
@@ -89,6 +118,7 @@ const RouteConstants = {
   BUSINESS_SUPPLIERS: '/businesses/:businessId/suppliers',
   BUSINESS_PURCHASES: '/businesses/:businessId/purchases',
   BUSINESS_PURCHASE_DETAIL: '/businesses/:businessId/purchases/:purchaseId',
+  BUSINESS_PURCHASE_ANALYTICS: '/businesses/:businessId/purchases/analytics',
   BUSINESS_RECEIVINGS: '/businesses/:businessId/receivings',
   BUSINESS_RECEIVING_DETAIL: '/businesses/:businessId/receivings/:receivingId',
   BUSINESS_PURCHASE_RETURNS: '/businesses/:businessId/purchase-returns',
@@ -98,7 +128,9 @@ const RouteConstants = {
   BUSINESS_SUPPLIER_CATALOG: '/businesses/:businessId/supplier-catalog',
   BUSINESS_SUPPLIER_CATALOG_DETAIL: '/businesses/:businessId/supplier-catalog/:catalogId',
   BUSINESS_SALES: '/businesses/:businessId/sales',
+  BUSINESS_CHECKOUT: '/businesses/:businessId/checkout',
   BUSINESS_SALES_DETAIL: '/businesses/:businessId/sales/:salesId',
+  BUSINESS_SALES_ANALYTICS: '/businesses/:businessId/sales/analytics',
   BUSINESS_SALES_RETURNS: '/businesses/:businessId/sales-returns',
   BUSINESS_SALES_RETURN_DETAIL: '/businesses/:businessId/sales-returns/:returnId',
   BUSINESS_RECEIVABLES: '/businesses/:businessId/receivables',
@@ -107,8 +139,10 @@ const RouteConstants = {
   BUSINESS_CASH_ACCOUNT_DETAIL: '/businesses/:businessId/cash-accounts/:accountId',
   BUSINESS_EXPENSES: '/businesses/:businessId/expenses',
   BUSINESS_EXPENSE_DETAIL: '/businesses/:businessId/expenses/:expenseId',
+  BUSINESS_EXPENSE_ANALYTICS: '/businesses/:businessId/expenses/analytics',
   BUSINESS_PAYMENTS: '/businesses/:businessId/payments',
   BUSINESS_PAYMENT_DETAIL: '/businesses/:businessId/payments/:paymentId',
+  BUSINESS_PAYMENT_ANALYTICS: '/businesses/:businessId/payments/analytics',
   BUSINESS_ACCOUNTING_COA: '/businesses/:businessId/accounting/chart-of-accounts',
   BUSINESS_ACCOUNTING_JOURNALS: '/businesses/:businessId/accounting/journals',
   BUSINESS_ACCOUNTING_JOURNAL_DETAIL: '/businesses/:businessId/accounting/journals/:journalId',
@@ -120,6 +154,16 @@ const RouteConstants = {
   BUSINESS_TAX_SUMMARY: '/businesses/:businessId/tax/summary',
   BUSINESS_AR_AGING: '/businesses/:businessId/receivables/aging',
   BUSINESS_AP_AGING: '/businesses/:businessId/purchases/payables/aging',
+  BUSINESS_PRODUCT_PROFITABILITY: '/businesses/:businessId/reports/product-profitability',
+  BUSINESS_OPERATIONAL_DASHBOARD: '/businesses/:businessId/dashboard/operational',
+  
+  PLATFORM: '/platform',
+  PLATFORM_DASHBOARD: '/platform/dashboard',
+  PLATFORM_BUSINESSES: '/platform/businesses',
+  PLATFORM_BUSINESS_DETAIL: '/platform/businesses/:businessId',
+  PLATFORM_SUBSCRIPTIONS: '/platform/subscriptions',
+  PLATFORM_USERS: '/platform/users',
+  PLATFORM_AUDIT_LOGS: '/platform/audit-logs',
 };
 
 export { RouteConstants };
@@ -128,6 +172,7 @@ export const AppRoutes: React.FC = () => {
   return (
     <BrowserRouter>
       <Routes>
+        {/* Public & User-level standalone routes (no AppShell) */}
         <Route path={RouteConstants.HOME} element={<Home />} />
         <Route
           path={RouteConstants.LOGIN}
@@ -177,414 +222,199 @@ export const AppRoutes: React.FC = () => {
             </ProtectedRoute>
           }
         />
+
+        {/* Business-scoped routes — wrapped in AppShell (Sidebar + Topbar + BusinessContext) */}
         <Route
-          path={RouteConstants.BUSINESS_DETAIL}
+          path="/businesses/:businessId"
           element={
             <ProtectedRoute>
-              <BusinessDetail />
+              <AppShell />
+            </ProtectedRoute>
+          }
+        >
+          <Route index element={<BusinessDetail />} />
+          <Route path="members" element={<BusinessMembers />} />
+          <Route path="branches" element={<Branches />} />
+          <Route path="categories" element={<Categories />} />
+          <Route path="units" element={<Units />} />
+          <Route path="products" element={<Products />} />
+          <Route path="products/:productId/variants" element={<ProductVariants />} />
+          <Route path="barcodes" element={<Barcodes />} />
+          <Route path="price-lists" element={<PriceLists />} />
+          <Route path="price-lists/:priceListId" element={<PriceListDetail />} />
+          <Route path="configuration" element={<BusinessConfigurationPage />} />
+          <Route path="warehouses" element={<Warehouses />} />
+          <Route path="warehouses/:warehouseId" element={<WarehouseDetail />} />
+          <Route path="inventory" element={<Inventory />} />
+          <Route path="inventory/stock-opnames" element={<StockOpnamePage />} />
+          <Route path="inventory/stock-cards" element={<StockCard />} />
+          <Route path="customers" element={<Customers />} />
+          <Route path="suppliers" element={<Suppliers />} />
+          <Route path="purchases" element={<Purchases />} />
+          <Route path="purchases/:purchaseId" element={<PurchaseDetail />} />
+          <Route path="purchases/analytics" element={<PurchaseAnalytics />} />
+          <Route path="receivings" element={<Receivings />} />
+          <Route path="receivings/:receivingId" element={<ReceivingDetail />} />
+          <Route path="purchase-returns" element={<PurchaseReturns />} />
+          <Route path="purchase-returns/:returnId" element={<PurchaseReturnDetail />} />
+          <Route path="purchases/payables" element={<Payables />} />
+          <Route path="purchases/payables/:purchaseId" element={<PayableDetail />} />
+          <Route path="purchases/payables/aging" element={<APAging />} />
+          <Route path="supplier-catalog" element={<SupplierCatalog />} />
+          <Route path="supplier-catalog/:catalogId" element={<SupplierCatalogDetail />} />
+          <Route path="checkout" element={<SalesCheckout />} />
+          <Route path="shifts" element={<Shifts />} />
+          <Route path="shifts/:shiftId" element={<ShiftDetail />} />
+          <Route path="sales" element={<Sales />} />
+          <Route path="sales/:salesId" element={<SalesDetail />} />
+          <Route path="sales/analytics" element={<SalesAnalytics />} />
+          <Route path="sales-returns" element={<SalesReturns />} />
+          <Route path="sales-returns/:returnId" element={<SalesReturnDetail />} />
+          <Route path="receivables" element={<Receivables />} />
+          <Route path="receivables/:salesId" element={<ReceivableDetail />} />
+          <Route path="receivables/aging" element={<ARAging />} />
+          <Route path="cash-accounts" element={<CashAccounts />} />
+          <Route path="cash-accounts/:accountId" element={<CashAccountDetail />} />
+          <Route path="expenses" element={<Expenses />} />
+          <Route path="expenses/:expenseId" element={<ExpenseDetail />} />
+          <Route path="expenses/analytics" element={<ExpenseAnalytics />} />
+          <Route path="payments" element={<Payments />} />
+          <Route path="payments/:paymentId" element={<PaymentDetail />} />
+          <Route path="payments/analytics" element={<PaymentAnalytics />} />
+          <Route path="accounting/chart-of-accounts" element={<ChartOfAccounts />} />
+          <Route path="accounting/journals" element={<AccountingJournals />} />
+          <Route path="accounting/journals/:journalId" element={<AccountingJournalDetail />} />
+          <Route path="accounting/trial-balance" element={<AccountingTrialBalance />} />
+          <Route path="accounting/periods" element={<AccountingPeriods />} />
+          <Route path="accounting/reports/profit-and-loss" element={<AccountingProfitAndLoss />} />
+          <Route path="accounting/reports/balance-sheet" element={<AccountingBalanceSheet />} />
+          <Route path="tax/configuration" element={<TaxConfiguration />} />
+          <Route path="tax/summary" element={<TaxSummary />} />
+          <Route path="reports/product-profitability" element={<ProductProfitability />} />
+          <Route path="dashboard/operational" element={<OperationalDashboard />} />
+          <Route path="delivery-notes" element={<DeliveryNotes />} />
+          <Route path="delivery-notes/:deliveryNoteId" element={<DeliveryNoteDetail />} />
+        </Route>
+
+        {/* Print-only views — standalone, outside AppShell for clean printing */}
+        <Route
+          path="/businesses/:businessId/print/sales-checkout/:id"
+          element={<ProtectedRoute><PrintSalesCheckout /></ProtectedRoute>}
+        />
+        <Route
+          path="/businesses/:businessId/print/sales-order/:id"
+          element={<ProtectedRoute><PrintSalesOrder /></ProtectedRoute>}
+        />
+        <Route
+          path="/businesses/:businessId/print/delivery-note/:id"
+          element={<ProtectedRoute><PrintDeliveryNote /></ProtectedRoute>}
+        />
+        <Route
+          path="/businesses/:businessId/print/purchase/:id"
+          element={<ProtectedRoute><PrintPurchase /></ProtectedRoute>}
+        />
+        <Route
+          path="/businesses/:businessId/print/customer-statement/:customerId"
+          element={<ProtectedRoute><PrintCustomerStatement /></ProtectedRoute>}
+        />
+        <Route
+          path="/businesses/:businessId/print/financial-report/:reportType"
+          element={<ProtectedRoute><PrintFinancialReport /></ProtectedRoute>}
+        />
+
+        {/* Notification List Route (Tenant) */}
+        <Route
+          path="/app/notifications"
+          element={
+            <ProtectedRoute>
+              <NotificationList scope="tenant" />
             </ProtectedRoute>
           }
         />
+
+        {/* Platform Administration Routes */}
         <Route
-          path={RouteConstants.BUSINESS_MEMBERS}
+          path="/platform"
           element={
-            <ProtectedRoute>
-              <BusinessMembers />
-            </ProtectedRoute>
+            <PlatformProtectedRoute>
+              <PlatformShell>
+                <PlatformDashboardPage />
+              </PlatformShell>
+            </PlatformProtectedRoute>
           }
         />
         <Route
-          path={RouteConstants.BUSINESS_BRANCHES}
+          path="/platform/dashboard"
           element={
-            <ProtectedRoute>
-              <Branches />
-            </ProtectedRoute>
+            <PlatformProtectedRoute>
+              <PlatformShell>
+                <PlatformDashboardPage />
+              </PlatformShell>
+            </PlatformProtectedRoute>
           }
         />
         <Route
-          path={RouteConstants.BUSINESS_CATEGORIES}
+          path="/platform/businesses"
           element={
-            <ProtectedRoute>
-              <Categories />
-            </ProtectedRoute>
+            <PlatformProtectedRoute>
+              <PlatformShell>
+                <PlatformBusinessesPage />
+              </PlatformShell>
+            </PlatformProtectedRoute>
           }
         />
         <Route
-          path={RouteConstants.BUSINESS_UNITS}
+          path="/platform/businesses/:businessId"
           element={
-            <ProtectedRoute>
-              <Units />
-            </ProtectedRoute>
+            <PlatformProtectedRoute>
+              <PlatformShell>
+                <PlatformBusinessDetailPage />
+              </PlatformShell>
+            </PlatformProtectedRoute>
           }
         />
         <Route
-          path={RouteConstants.BUSINESS_PRODUCTS}
+          path="/platform/subscriptions"
           element={
-            <ProtectedRoute>
-              <Products />
-            </ProtectedRoute>
+            <PlatformProtectedRoute>
+              <PlatformShell>
+                <PlatformSubscriptionsPage />
+              </PlatformShell>
+            </PlatformProtectedRoute>
           }
         />
         <Route
-          path={RouteConstants.BUSINESS_PRODUCT_VARIANTS}
+          path="/platform/users"
           element={
-            <ProtectedRoute>
-              <ProductVariants />
-            </ProtectedRoute>
+            <PlatformProtectedRoute>
+              <PlatformShell>
+                <PlatformUsersPage />
+              </PlatformShell>
+            </PlatformProtectedRoute>
           }
         />
         <Route
-          path={RouteConstants.BUSINESS_BARCODES}
+          path="/platform/audit-logs"
           element={
-            <ProtectedRoute>
-              <Barcodes />
-            </ProtectedRoute>
+            <PlatformProtectedRoute>
+              <PlatformShell>
+                <PlatformAuditLogsPage />
+              </PlatformShell>
+            </PlatformProtectedRoute>
           }
         />
         <Route
-          path={RouteConstants.BUSINESS_PRICE_LISTS}
+          path="/platform/notifications"
           element={
-            <ProtectedRoute>
-              <PriceLists />
-            </ProtectedRoute>
+            <PlatformProtectedRoute>
+              <PlatformShell>
+                <NotificationList scope="platform" />
+              </PlatformShell>
+            </PlatformProtectedRoute>
           }
         />
-        <Route
-          path={RouteConstants.BUSINESS_PRICE_LIST_DETAIL}
-          element={
-            <ProtectedRoute>
-              <PriceListDetail />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path={RouteConstants.BUSINESS_CONFIGURATION}
-          element={
-            <ProtectedRoute>
-              <BusinessConfigurationPage />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path={RouteConstants.BUSINESS_WAREHOUSES}
-          element={
-            <ProtectedRoute>
-              <Warehouses />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path={RouteConstants.BUSINESS_WAREHOUSE_DETAIL}
-          element={
-            <ProtectedRoute>
-              <WarehouseDetail />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path={RouteConstants.BUSINESS_INVENTORY}
-          element={
-            <ProtectedRoute>
-              <Inventory />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path={RouteConstants.BUSINESS_STOCK_OPNAME}
-          element={
-            <ProtectedRoute>
-              <StockOpnamePage />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path={RouteConstants.BUSINESS_STOCK_CARD}
-          element={
-            <ProtectedRoute>
-              <StockCard />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path={RouteConstants.BUSINESS_CUSTOMERS}
-          element={
-            <ProtectedRoute>
-              <Customers />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path={RouteConstants.BUSINESS_SUPPLIERS}
-          element={
-            <ProtectedRoute>
-              <Suppliers />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path={RouteConstants.BUSINESS_PURCHASES}
-          element={
-            <ProtectedRoute>
-              <Purchases />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path={RouteConstants.BUSINESS_PURCHASE_DETAIL}
-          element={
-            <ProtectedRoute>
-              <PurchaseDetail />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path={RouteConstants.BUSINESS_RECEIVINGS}
-          element={
-            <ProtectedRoute>
-              <Receivings />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path={RouteConstants.BUSINESS_RECEIVING_DETAIL}
-          element={
-            <ProtectedRoute>
-              <ReceivingDetail />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path={RouteConstants.BUSINESS_PURCHASE_RETURNS}
-          element={
-            <ProtectedRoute>
-              <PurchaseReturns />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path={RouteConstants.BUSINESS_PURCHASE_RETURN_DETAIL}
-          element={
-            <ProtectedRoute>
-              <PurchaseReturnDetail />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path={RouteConstants.BUSINESS_PAYABLES}
-          element={
-            <ProtectedRoute>
-              <Payables />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path={RouteConstants.BUSINESS_PAYABLE_DETAIL}
-          element={
-            <ProtectedRoute>
-              <PayableDetail />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path={RouteConstants.BUSINESS_SUPPLIER_CATALOG}
-          element={
-            <ProtectedRoute>
-              <SupplierCatalog />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path={RouteConstants.BUSINESS_SUPPLIER_CATALOG_DETAIL}
-          element={
-            <ProtectedRoute>
-              <SupplierCatalogDetail />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path={RouteConstants.BUSINESS_SALES}
-          element={
-            <ProtectedRoute>
-              <Sales />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path={RouteConstants.BUSINESS_SALES_DETAIL}
-          element={
-            <ProtectedRoute>
-              <SalesDetail />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path={RouteConstants.BUSINESS_SALES_RETURNS}
-          element={
-            <ProtectedRoute>
-              <SalesReturns />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path={RouteConstants.BUSINESS_SALES_RETURN_DETAIL}
-          element={
-            <ProtectedRoute>
-              <SalesReturnDetail />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path={RouteConstants.BUSINESS_RECEIVABLES}
-          element={
-            <ProtectedRoute>
-              <Receivables />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path={RouteConstants.BUSINESS_RECEIVABLE_DETAIL}
-          element={
-            <ProtectedRoute>
-              <ReceivableDetail />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path={RouteConstants.BUSINESS_CASH_ACCOUNTS}
-          element={
-            <ProtectedRoute>
-              <CashAccounts />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path={RouteConstants.BUSINESS_CASH_ACCOUNT_DETAIL}
-          element={
-            <ProtectedRoute>
-              <CashAccountDetail />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path={RouteConstants.BUSINESS_EXPENSES}
-          element={
-            <ProtectedRoute>
-              <Expenses />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path={RouteConstants.BUSINESS_EXPENSE_DETAIL}
-          element={
-            <ProtectedRoute>
-              <ExpenseDetail />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path={RouteConstants.BUSINESS_PAYMENTS}
-          element={
-            <ProtectedRoute>
-              <Payments />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path={RouteConstants.BUSINESS_PAYMENT_DETAIL}
-          element={
-            <ProtectedRoute>
-              <PaymentDetail />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path={RouteConstants.BUSINESS_ACCOUNTING_COA}
-          element={
-            <ProtectedRoute>
-              <ChartOfAccounts />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path={RouteConstants.BUSINESS_ACCOUNTING_JOURNALS}
-          element={
-            <ProtectedRoute>
-              <AccountingJournals />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path={RouteConstants.BUSINESS_ACCOUNTING_JOURNAL_DETAIL}
-          element={
-            <ProtectedRoute>
-              <AccountingJournalDetail />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path={RouteConstants.BUSINESS_ACCOUNTING_TRIAL_BALANCE}
-          element={
-            <ProtectedRoute>
-              <AccountingTrialBalance />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path={RouteConstants.BUSINESS_ACCOUNTING_PERIODS}
-          element={
-            <ProtectedRoute>
-              <AccountingPeriods />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path={RouteConstants.BUSINESS_ACCOUNTING_REPORT_PNL}
-          element={
-            <ProtectedRoute>
-              <AccountingProfitAndLoss />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path={RouteConstants.BUSINESS_ACCOUNTING_REPORT_BS}
-          element={
-            <ProtectedRoute>
-              <AccountingBalanceSheet />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path={RouteConstants.BUSINESS_TAX_CONFIGURATION}
-          element={
-            <ProtectedRoute>
-              <TaxConfiguration />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path={RouteConstants.BUSINESS_TAX_SUMMARY}
-          element={
-            <ProtectedRoute>
-              <TaxSummary />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path={RouteConstants.BUSINESS_AR_AGING}
-          element={
-            <ProtectedRoute>
-              <ARAging />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path={RouteConstants.BUSINESS_AP_AGING}
-          element={
-            <ProtectedRoute>
-              <APAging />
-            </ProtectedRoute>
-          }
-        />
+
+        {/* Global catch-all */}
         <Route path="*" element={<NotFound />} />
       </Routes>
     </BrowserRouter>

@@ -11,13 +11,19 @@ from app.modules.payment.schemas import (
     PaymentDirection,
     PaymentTargetType,
     PaymentStatus,
+    PaymentMethod,
+    PaymentAnalyticsSummaryResponse,
+    PaymentAnalyticsByDirectionResponse,
+    PaymentAnalyticsByMethodResponse,
+    PaymentDirectionBreakdownItem,
+    PaymentMethodBreakdownItem,
 )
 from app.modules.payment.repository import (
     AbstractPaymentRepository,
     payment_repository,
 )
 from app.modules.cash_account.repository import cash_account_repository
-from app.modules.cash_account.schemas import CashMovementType, MovementDirection, CashAccountStatus
+from app.modules.cash_account.schemas import CashMovementType, MovementDirection, CashAccountStatus, CashAccountType
 from app.modules.sales.repository import sales_repository
 from app.modules.sales.schemas import SalesStatus
 from app.modules.purchase.repository import purchase_repository
@@ -30,6 +36,8 @@ from app.modules.branch.repository import branch_repository
 from app.modules.business_membership.service import BusinessMembershipService, business_membership_service
 from app.modules.business_membership.schemas import BusinessMembershipRole
 from app.modules.accounting.integration import accounting_integration_service
+from app.modules.cashier_shift.schemas import ShiftStatus
+from app.modules.cashier_shift.service import cashier_shift_service
 
 
 class PaymentService:
@@ -67,13 +75,39 @@ class PaymentService:
             if existing:
                 return PaymentResponse(**existing.model_dump())
 
-        # Validate Cash Account
-        cash_account = await cash_account_repository.get_account_by_id(payload.cash_account_id, business_id)
-        if not cash_account or cash_account.status != CashAccountStatus.ACTIVE:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Cash account is inactive or not found.",
-            )
+        # Store Credit does not require cash account
+        is_store_credit = payload.payment_method == PaymentMethod.STORE_CREDIT
+
+        if is_store_credit:
+            if not payload.customer_id:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="customer_id is required for STORE_CREDIT payments.",
+                )
+            cust = await customer_repository.get_by_id(payload.customer_id, business_id)
+            if not cust:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Customer not found for STORE_CREDIT payment.",
+                )
+            if cust.store_credit_balance < payload.amount:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Insufficient store credit balance. Available: {cust.store_credit_balance}, requested: {payload.amount}.",
+                )
+        else:
+            # Validate Cash Account
+            if not payload.cash_account_id:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="cash_account_id is required for non-STORE_CREDIT payments.",
+                )
+            cash_account = await cash_account_repository.get_account_by_id(payload.cash_account_id, business_id)
+            if not cash_account or cash_account.status != CashAccountStatus.ACTIVE:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Cash account is inactive or not found.",
+                )
 
         # Direction and target validation
         target_currency = None
@@ -110,7 +144,7 @@ class PaymentService:
             target_branch_id = purchase.branch_id
             target_business_id = purchase.business_id
 
-        if cash_account.currency != payload.currency:
+        if not is_store_credit and cash_account.currency != payload.currency:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Payment currency does not match cash account currency.")
 
         # Check outstanding / overpayment (Policy: Reject payment > outstanding)
@@ -171,33 +205,82 @@ class PaymentService:
             "idempotency_key": payload.idempotency_key,
         }
 
+# Payment shift context validation — CASH on CASH account requires shift_id
+        if payload.payment_method == PaymentMethod.CASH and payload.cash_account_id:
+            acc = await cash_account_repository.get_account_by_id(payload.cash_account_id, business_id)
+            if not acc or acc.status != CashAccountStatus.ACTIVE:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Cash account is inactive or not found.",
+                )
+            if acc.account_type != CashAccountType.CASH:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="CASH payment requires a CASH type cash account.",
+                )
+            # shift_id is REQUIRED for CASH payments on CASH accounts
+            if not payload.shift_id:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="CASH payment on a CASH account requires an active shift. shift_id is required.",
+                )
+            shift = await cashier_shift_service.shift_repo.get_shift_by_id(
+                payload.shift_id, business_id
+            )
+            if not shift or shift.status != ShiftStatus.OPEN:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="CASH payment shift_id must reference an open shift.",
+                )
+            if shift.cash_account_id != payload.cash_account_id:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="CASH payment shift_id cash_account mismatch.",
+                )
+            if shift.cashier_user_id != user_id:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="CASH payment shift does not belong to current user.",
+                )
+
         # ATOMIC POSTING SIMULATION
-        # In real DB, we would use a transaction here.
-        # Since we are in-memory, we attempt to create payment, then cash movement, then accounting.
         try:
             payment = await self.payment_repo.create_payment(payment_data)
 
-            # Create Cash Movement
-            movement_type = CashMovementType.SALES_PAYMENT if payload.direction == PaymentDirection.CUSTOMER_IN else CashMovementType.EXPENSE
-            direction = MovementDirection.IN if payload.direction == PaymentDirection.CUSTOMER_IN else MovementDirection.OUT
+            if is_store_credit:
+                # Debit store credit balance
+                from app.modules.customer_credit.service import customer_credit_service
+                await customer_credit_service.redeem_store_credit(
+                    business_id=business_id,
+                    user_id=user_id,
+                    customer_id=payload.customer_id,
+                    amount=payload.amount,
+                    reference_type="PAYMENT",
+                    reference_id=payment.id,
+                )
+            else:
+                # Create Cash Movement
+                movement_type = CashMovementType.SALES_PAYMENT if payload.direction == PaymentDirection.CUSTOMER_IN else CashMovementType.EXPENSE
+                direction = MovementDirection.IN if payload.direction == PaymentDirection.CUSTOMER_IN else MovementDirection.OUT
 
-            # Check cash balance for OUT
-            if direction == MovementDirection.OUT:
-                balance = await self._calculate_balance(business_id, cash_account)
-                if balance < payload.amount:
-                    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Insufficient cash balance.")
+                # Check cash balance for OUT
+                if direction == MovementDirection.OUT:
+                    balance = await self._calculate_balance(business_id, cash_account)
+                    if balance < payload.amount:
+                        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Insufficient cash balance.")
 
-            await cash_account_repository.create_movement(
-                business_id=business_id,
-                cash_account_id=payload.cash_account_id,
-                movement_type=movement_type,
-                amount=payload.amount,
-                direction=direction,
-                performed_by_user_id=user_id,
-                reference_type="PAYMENT",
-                reference_id=payment.id,
-                description=f"Payment {payment.payment_number}",
-            )
+                await cash_account_repository.create_movement(
+                    business_id=business_id,
+                    cash_account_id=payload.cash_account_id,
+                    movement_type=movement_type,
+                    amount=payload.amount,
+                    direction=direction,
+                    performed_by_user_id=user_id,
+                    reference_type="PAYMENT",
+                    reference_id=payment.id,
+                    description=f"Payment {payment.payment_number}",
+                    shift_id=payload.shift_id,
+                )
 
             # Accounting Integration within safe_post lock (last step)
             idem_key = f"PAYMENT:{payment.id}:RECORDED"
@@ -211,6 +294,7 @@ class PaymentService:
                     direction=payment.direction.value,
                     payment_date=payment.payment_date,
                     branch_id=payment.branch_id,
+                    payment_method=payment.payment_method.value,
                 )
             )
 
@@ -219,9 +303,20 @@ class PaymentService:
             # Compensating rollback: delete created payment and cash movement on failure
             if 'payment' in locals() and payment:
                 await self.payment_repo.delete_payment(payment.id, business_id)
-                await cash_account_repository.delete_movement_by_reference(
-                    business_id=business_id, reference_type="PAYMENT", reference_id=payment.id
-                )
+                if not is_store_credit:
+                    await cash_account_repository.delete_movement_by_reference(
+                        business_id=business_id, reference_type="PAYMENT", reference_id=payment.id
+                    )
+                else:
+                    # Rollback store credit redemption by reissuing
+                    if payload.customer_id:
+                        cust_rollback = await customer_repository.get_by_id(payload.customer_id, business_id)
+                        if cust_rollback:
+                            from app.modules.customer_credit.service import customer_credit_service
+                            new_bal = cust_rollback.store_credit_balance + payload.amount
+                            await customer_repository.update_credit_fields(
+                                payload.customer_id, business_id, store_credit_balance=new_bal
+                            )
             raise e
 
     async def _calculate_balance(self, business_id: str, account) -> Decimal:
@@ -280,6 +375,15 @@ class PaymentService:
         for m in movements:
             if m.reference_type == "PAYMENT" and m.reference_id == p.id:
                 reversal_direction = MovementDirection.OUT if m.direction == MovementDirection.IN else MovementDirection.IN
+                
+                # Shift attribution for reversal: only if original shift is still OPEN
+                reversal_shift_id = None
+                if m.shift_id:
+                    shift_repo = cashier_shift_service.shift_repo
+                    original_shift = await shift_repo.get_shift_by_id(m.shift_id, business_id)
+                    if original_shift and original_shift.status == ShiftStatus.OPEN:
+                        reversal_shift_id = m.shift_id
+                
                 await cash_account_repository.create_movement(
                     business_id=business_id,
                     cash_account_id=p.cash_account_id,
@@ -290,10 +394,189 @@ class PaymentService:
                     reference_type="PAYMENT_VOID",
                     reference_id=p.id,
                     description=f"Reversal for {p.payment_number}",
+                    shift_id=reversal_shift_id,
                 )
 
         voided = await self.payment_repo.void_payment(payment_id, business_id, user_id)
         return PaymentResponse(**voided.model_dump())
+
+
+# --- Payment Analytics ---
+
+    async def _validate_analytics_entities(
+        self,
+        business_id: str,
+        branch_id: Optional[str] = None,
+    ):
+        if branch_id:
+            br = await branch_repository.get_by_id(branch_id)
+            if not br or br.business_id != business_id:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Branch not found in this business.")
+
+    async def get_payment_analytics_summary(
+        self,
+        business_id: str,
+        user_id: str,
+        date_from: datetime,
+        date_to: datetime,
+        branch_id: Optional[str] = None,
+        direction: Optional[PaymentDirection] = None,
+        payment_method: Optional[PaymentMethod] = None,
+    ) -> PaymentAnalyticsSummaryResponse:
+        await self._validate_access(business_id, user_id)
+        if date_from > date_to:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="date_from must be before or equal to date_to.")
+        await self._validate_analytics_entities(business_id, branch_id)
+
+        payments, _ = await self.payment_repo.list_payments(
+            business_id=business_id, page=1, page_size=10000,
+        )
+
+        # Filter by payment_date range, status, branch, direction, method
+        filtered = [
+            p for p in payments
+            if p.payment_date >= date_from and p.payment_date <= date_to
+            and p.status == PaymentStatus.RECORDED
+            and (branch_id is None or p.branch_id == branch_id)
+            and (direction is None or p.direction == direction)
+            and (payment_method is None or p.payment_method == payment_method)
+        ]
+
+        # Separate voided for operational stats (same date/status/branch filter but VOIDED)
+        voided = [
+            p for p in payments
+            if p.payment_date >= date_from and p.payment_date <= date_to
+            and p.status == PaymentStatus.VOIDED
+            and (branch_id is None or p.branch_id == branch_id)
+            and (direction is None or p.direction == direction)
+            and (payment_method is None or p.payment_method == payment_method)
+        ]
+
+        gross_recorded = sum((p.amount for p in filtered), Decimal("0"))
+        customer_in = sum((p.amount for p in filtered if p.direction == PaymentDirection.CUSTOMER_IN), Decimal("0"))
+        supplier_out = sum((p.amount for p in filtered if p.direction == PaymentDirection.SUPPLIER_OUT), Decimal("0"))
+        payment_count = len(filtered)
+        voided_count = len(voided)
+        voided_amount = sum((p.amount for p in voided), Decimal("0"))
+
+        average = gross_recorded / payment_count if payment_count > 0 else Decimal("0")
+
+        return PaymentAnalyticsSummaryResponse(
+            date_from=date_from,
+            date_to=date_to,
+            gross_recorded=gross_recorded,
+            customer_in_total=customer_in,
+            supplier_out_total=supplier_out,
+            net_payment_flow=customer_in - supplier_out,
+            voided_count=voided_count,
+            voided_amount=voided_amount,
+            payment_count=payment_count,
+            average_payment_value=average,
+        )
+
+    async def get_payment_analytics_by_direction(
+        self,
+        business_id: str,
+        user_id: str,
+        date_from: datetime,
+        date_to: datetime,
+        branch_id: Optional[str] = None,
+        direction: Optional[PaymentDirection] = None,
+        payment_method: Optional[PaymentMethod] = None,
+    ) -> PaymentAnalyticsByDirectionResponse:
+        await self._validate_access(business_id, user_id)
+        if date_from > date_to:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="date_from must be before or equal to date_to.")
+        await self._validate_analytics_entities(business_id, branch_id)
+
+        payments, _ = await self.payment_repo.list_payments(
+            business_id=business_id, page=1, page_size=10000,
+        )
+
+        filtered = [
+            p for p in payments
+            if p.payment_date >= date_from and p.payment_date <= date_to
+            and p.status == PaymentStatus.RECORDED
+            and (branch_id is None or p.branch_id == branch_id)
+            and (direction is None or p.direction == direction)
+            and (payment_method is None or p.payment_method == payment_method)
+        ]
+
+        dir_map: dict[str, dict] = {}
+        for p in filtered:
+            d = p.direction.value
+            if d not in dir_map:
+                dir_map[d] = {"direction": d, "amount": Decimal("0"), "payment_count": 0}
+            dir_map[d]["amount"] += p.amount
+            dir_map[d]["payment_count"] += 1
+
+        directions = [
+            PaymentDirectionBreakdownItem(**v) for v in dir_map.values()
+        ]
+        directions.sort(key=lambda x: (-x.amount, x.direction))
+
+        gross = sum((d.amount for d in directions), Decimal("0"))
+        count = sum(d.payment_count for d in directions)
+
+        return PaymentAnalyticsByDirectionResponse(
+            date_from=date_from,
+            date_to=date_to,
+            gross_recorded=gross,
+            payment_count=count,
+            directions=directions,
+        )
+
+    async def get_payment_analytics_by_method(
+        self,
+        business_id: str,
+        user_id: str,
+        date_from: datetime,
+        date_to: datetime,
+        branch_id: Optional[str] = None,
+        direction: Optional[PaymentDirection] = None,
+        payment_method: Optional[PaymentMethod] = None,
+    ) -> PaymentAnalyticsByMethodResponse:
+        await self._validate_access(business_id, user_id)
+        if date_from > date_to:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="date_from must be before or equal to date_to.")
+        await self._validate_analytics_entities(business_id, branch_id)
+
+        payments, _ = await self.payment_repo.list_payments(
+            business_id=business_id, page=1, page_size=10000,
+        )
+
+        filtered = [
+            p for p in payments
+            if p.payment_date >= date_from and p.payment_date <= date_to
+            and p.status == PaymentStatus.RECORDED
+            and (branch_id is None or p.branch_id == branch_id)
+            and (direction is None or p.direction == direction)
+            and (payment_method is None or p.payment_method == payment_method)
+        ]
+
+        method_map: dict[str, dict] = {}
+        for p in filtered:
+            m = p.payment_method.value
+            if m not in method_map:
+                method_map[m] = {"payment_method": m, "amount": Decimal("0"), "payment_count": 0}
+            method_map[m]["amount"] += p.amount
+            method_map[m]["payment_count"] += 1
+
+        methods = [
+            PaymentMethodBreakdownItem(**v) for v in method_map.values()
+        ]
+        methods.sort(key=lambda x: (-x.amount, x.payment_method))
+
+        gross = sum((m.amount for m in methods), Decimal("0"))
+        count = sum(m.payment_count for m in methods)
+
+        return PaymentAnalyticsByMethodResponse(
+            date_from=date_from,
+            date_to=date_to,
+            gross_recorded=gross,
+            payment_count=count,
+            methods=methods,
+        )
 
 
 payment_service = PaymentService()

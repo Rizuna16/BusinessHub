@@ -35,6 +35,58 @@ from app.modules.branch.repository import InMemoryBranchRepository
 from app.modules.stock_opname.repository import InMemoryStockOpnameRepository
 from app.modules.sales_payment.repository import InMemorySalesPaymentRepository
 from app.modules.accounting.integration import _idempotency_locks
+from app.modules.cashier_shift.repository import InMemoryCashierShiftRepository
+from app.modules.customer_credit.repository import InMemoryStoreCreditLedgerRepository
+
+# Override production PostgreSQL router wiring with InMemory services
+from app.modules.purchase.router import get_scoped_purchase_service
+from app.modules.receiving.router import get_scoped_receiving_service
+from app.modules.purchase_return.router import get_scoped_purchase_return_service
+from app.modules.business.router import get_scoped_business_service
+from app.modules.business_membership.router import get_scoped_membership_service
+from app.modules.purchase.service import PurchaseService
+from app.modules.receiving.service import ReceivingService
+from app.modules.purchase_return.service import PurchaseReturnService
+from app.modules.business_membership.service import BusinessMembershipService
+from app.modules.business.service import BusinessService
+from app.modules.subscription.service import SubscriptionService
+
+
+def _inmemory_purchase_service():
+    return PurchaseService(membership_service=BusinessMembershipService())
+
+
+def _inmemory_receiving_service():
+    return ReceivingService(membership_service=BusinessMembershipService())
+
+
+def _inmemory_purchase_return_service():
+    return PurchaseReturnService(membership_service=BusinessMembershipService())
+
+
+def _inmemory_business_service():
+    membership_svc = BusinessMembershipService()
+    subscription_svc = SubscriptionService()
+    return BusinessService(membership_service=membership_svc, subscription_service_instance=subscription_svc)
+
+
+def _inmemory_membership_service():
+    return BusinessMembershipService()
+
+
+@pytest.fixture(autouse=True)
+def setup_test_environment():
+    app.dependency_overrides[get_scoped_purchase_service] = _inmemory_purchase_service
+    app.dependency_overrides[get_scoped_receiving_service] = _inmemory_receiving_service
+    app.dependency_overrides[get_scoped_purchase_return_service] = _inmemory_purchase_return_service
+    app.dependency_overrides[get_scoped_business_service] = _inmemory_business_service
+    app.dependency_overrides[get_scoped_membership_service] = _inmemory_membership_service
+    yield
+    app.dependency_overrides.pop(get_scoped_purchase_service, None)
+    app.dependency_overrides.pop(get_scoped_receiving_service, None)
+    app.dependency_overrides.pop(get_scoped_purchase_return_service, None)
+    app.dependency_overrides.pop(get_scoped_business_service, None)
+    app.dependency_overrides.pop(get_scoped_membership_service, None)
 
 client = TestClient(app)
 
@@ -72,6 +124,8 @@ def clear_repositories():
     InMemoryAccountRepository.clear()
     InMemoryUserRepository.clear()
     InMemorySalesPaymentRepository.clear()
+    InMemoryCashierShiftRepository.clear()
+    InMemoryStoreCreditLedgerRepository.clear()
     yield
     _idempotency_locks.clear()
     InMemoryAccountingRepository.clear()
@@ -105,6 +159,8 @@ def clear_repositories():
     InMemoryAccountRepository.clear()
     InMemoryUserRepository.clear()
     InMemorySalesPaymentRepository.clear()
+    InMemoryCashierShiftRepository.clear()
+    InMemoryStoreCreditLedgerRepository.clear()
 
 def register_user(email="owner@example.com", name="Owner Test"):
     res = client.post("/api/v1/auth/register", json={"email": email, "full_name": name, "password": "Password123", "password_confirmation": "Password123"})
@@ -150,7 +206,9 @@ def create_cash_account(token, biz_id, name="Kas Utama", code="CASH01", opening_
 def create_customer(token, biz_id, name="Customer 1"):
     res = client.post(f"/api/v1/businesses/{biz_id}/customers", headers={"Authorization": f"Bearer {token}"}, json={"name": name, "customer_type": "INDIVIDUAL"})
     assert res.status_code == 201
-    return res.json()["id"]
+    cid = res.json()["id"]
+    client.put(f"/api/v1/businesses/{biz_id}/customers/{cid}/credit/limit", headers={"Authorization": f"Bearer {token}"}, json={"credit_limit": "100000000.00"})
+    return cid
 
 def create_supplier(token, biz_id, name="Supplier 1"):
     res = client.post(f"/api/v1/businesses/{biz_id}/suppliers", headers={"Authorization": f"Bearer {token}"}, json={"name": name, "supplier_type": "ORGANIZATION"})
@@ -198,6 +256,11 @@ def setup_purchase(token, biz_id, qty=10, price=50000, branch_id=None):
     pur_id = pur_res.json()["id"]
     client.post(f"/api/v1/businesses/{biz_id}/purchases/{pur_id}/lines", headers={"Authorization": f"Bearer {token}"}, json={"product_id": product_id, "quantity": qty, "unit_price": price})
     return pur_id, branch_id
+
+def open_shift(token, biz_id, branch_id, cash_account_id):
+    res = client.post(f"/api/v1/businesses/{biz_id}/shifts", headers={"Authorization": f"Bearer {token}"}, json={"branch_id": branch_id, "cash_account_id": cash_account_id, "opening_balance": 0})
+    assert res.status_code == 201
+    return res.json()["id"]
 
 # ============================================================
 # 1. SALES ACCOUNTING INTEGRATION
@@ -327,10 +390,11 @@ class TestPaymentAccountingIntegration:
         token, _ = register_user()
         biz_id = create_business(token)
         cash_id = create_cash_account(token, biz_id)
-        sales_id, _ = setup_sale(token, biz_id)
+        sales_id, br_id = setup_sale(token, biz_id)
         client.post(f"/api/v1/businesses/{biz_id}/sales/{sales_id}/finalize", headers={"Authorization": f"Bearer {token}"})
+        shift_id = open_shift(token, biz_id, br_id, cash_id)
 
-        pay_res = client.post(f"/api/v1/businesses/{biz_id}/payments", headers={"Authorization": f"Bearer {token}"}, json={"direction": "CUSTOMER_IN", "target_type": "SALES", "target_id": sales_id, "amount": 1000000, "currency": "IDR", "payment_method": "CASH", "cash_account_id": cash_id})
+        pay_res = client.post(f"/api/v1/businesses/{biz_id}/payments", headers={"Authorization": f"Bearer {token}"}, json={"direction": "CUSTOMER_IN", "target_type": "SALES", "target_id": sales_id, "amount": 1000000, "currency": "IDR", "payment_method": "CASH", "cash_account_id": cash_id, "shift_id": shift_id})
         assert pay_res.status_code == 201
         pay_id = pay_res.json()["id"]
 
@@ -344,10 +408,11 @@ class TestPaymentAccountingIntegration:
         token, _ = register_user()
         biz_id = create_business(token)
         cash_id = create_cash_account(token, biz_id)
-        pur_id, _ = setup_purchase(token, biz_id)
+        pur_id, br_id = setup_purchase(token, biz_id)
         client.post(f"/api/v1/businesses/{biz_id}/purchases/{pur_id}/finalize", headers={"Authorization": f"Bearer {token}"})
+        shift_id = open_shift(token, biz_id, br_id, cash_id)
 
-        pay_res = client.post(f"/api/v1/businesses/{biz_id}/payments", headers={"Authorization": f"Bearer {token}"}, json={"direction": "SUPPLIER_OUT", "target_type": "PURCHASE", "target_id": pur_id, "amount": 500000, "currency": "IDR", "payment_method": "CASH", "cash_account_id": cash_id})
+        pay_res = client.post(f"/api/v1/businesses/{biz_id}/payments", headers={"Authorization": f"Bearer {token}"}, json={"direction": "SUPPLIER_OUT", "target_type": "PURCHASE", "target_id": pur_id, "amount": 500000, "currency": "IDR", "payment_method": "CASH", "cash_account_id": cash_id, "shift_id": shift_id})
         assert pay_res.status_code == 201
         pay_id = pay_res.json()["id"]
 
@@ -361,10 +426,11 @@ class TestPaymentAccountingIntegration:
         token, _ = register_user()
         biz_id = create_business(token)
         cash_id = create_cash_account(token, biz_id)
-        sales_id, _ = setup_sale(token, biz_id)
+        sales_id, br_id = setup_sale(token, biz_id)
         client.post(f"/api/v1/businesses/{biz_id}/sales/{sales_id}/finalize", headers={"Authorization": f"Bearer {token}"})
+        shift_id = open_shift(token, biz_id, br_id, cash_id)
 
-        pay_res = client.post(f"/api/v1/businesses/{biz_id}/payments", headers={"Authorization": f"Bearer {token}"}, json={"direction": "CUSTOMER_IN", "target_type": "SALES", "target_id": sales_id, "amount": 1000000, "currency": "IDR", "payment_method": "CASH", "cash_account_id": cash_id})
+        pay_res = client.post(f"/api/v1/businesses/{biz_id}/payments", headers={"Authorization": f"Bearer {token}"}, json={"direction": "CUSTOMER_IN", "target_type": "SALES", "target_id": sales_id, "amount": 1000000, "currency": "IDR", "payment_method": "CASH", "cash_account_id": cash_id, "shift_id": shift_id})
         pay_id = pay_res.json()["id"]
 
         void_res = client.post(f"/api/v1/businesses/{biz_id}/payments/{pay_id}/void", headers={"Authorization": f"Bearer {token}"})
@@ -434,14 +500,15 @@ class TestEndToEndFinancialReconciliation:
         client.post(f"/api/v1/businesses/{biz_id}/sales/{sales_id}/finalize", headers={"Authorization": f"Bearer {token}"})
 
         # 2. Customer Payment (1,000,000)
-        client.post(f"/api/v1/businesses/{biz_id}/payments", headers={"Authorization": f"Bearer {token}"}, json={"direction": "CUSTOMER_IN", "target_type": "SALES", "target_id": sales_id, "amount": 1000000, "currency": "IDR", "payment_method": "CASH", "cash_account_id": cash_id})
+        shift_id = open_shift(token, biz_id, branch_id, cash_id)
+        client.post(f"/api/v1/businesses/{biz_id}/payments", headers={"Authorization": f"Bearer {token}"}, json={"direction": "CUSTOMER_IN", "target_type": "SALES", "target_id": sales_id, "amount": 1000000, "currency": "IDR", "payment_method": "CASH", "cash_account_id": cash_id, "shift_id": shift_id})
 
         # 3. Purchase (500,000)
         pur_id, _ = setup_purchase(token, biz_id, qty=10, price=50000, branch_id=branch_id)
         client.post(f"/api/v1/businesses/{biz_id}/purchases/{pur_id}/finalize", headers={"Authorization": f"Bearer {token}"})
 
         # 4. Supplier Payment (500,000)
-        client.post(f"/api/v1/businesses/{biz_id}/payments", headers={"Authorization": f"Bearer {token}"}, json={"direction": "SUPPLIER_OUT", "target_type": "PURCHASE", "target_id": pur_id, "amount": 500000, "currency": "IDR", "payment_method": "CASH", "cash_account_id": cash_id})
+        client.post(f"/api/v1/businesses/{biz_id}/payments", headers={"Authorization": f"Bearer {token}"}, json={"direction": "SUPPLIER_OUT", "target_type": "PURCHASE", "target_id": pur_id, "amount": 500000, "currency": "IDR", "payment_method": "CASH", "cash_account_id": cash_id, "shift_id": shift_id})
 
         # 5. Expense (200,000)
         cat_id = create_expense_category(token, biz_id)
@@ -504,9 +571,10 @@ class TestIdempotency:
         token, _ = register_user()
         biz_id = create_business(token)
         cash_id = create_cash_account(token, biz_id)
-        sales_id, _ = setup_sale(token, biz_id)
+        sales_id, branch_id = setup_sale(token, biz_id)
         client.post(f"/api/v1/businesses/{biz_id}/sales/{sales_id}/finalize", headers={"Authorization": f"Bearer {token}"})
-        client.post(f"/api/v1/businesses/{biz_id}/payments", headers={"Authorization": f"Bearer {token}"}, json={"direction": "CUSTOMER_IN", "target_type": "SALES", "target_id": sales_id, "amount": 1000000, "currency": "IDR", "payment_method": "CASH", "cash_account_id": cash_id})
+        shift_id = open_shift(token, biz_id, branch_id, cash_id)
+        client.post(f"/api/v1/businesses/{biz_id}/payments", headers={"Authorization": f"Bearer {token}"}, json={"direction": "CUSTOMER_IN", "target_type": "SALES", "target_id": sales_id, "amount": 1000000, "currency": "IDR", "payment_method": "CASH", "cash_account_id": cash_id, "shift_id": shift_id})
         journals = client.get(f"/api/v1/businesses/{biz_id}/accounting/journals", headers={"Authorization": f"Bearer {token}"}).json()["items"]
         sale_j = [j for j in journals if j["reference_type"] == "SALES" and j["reference_id"] == sales_id]
         assert len(sale_j) == 1
@@ -541,3 +609,282 @@ class TestTenantIsolation:
 
         assert get_journal_count(t1, biz1) == 1
         assert get_journal_count(t2, biz2) == 1
+
+
+# ============================================================
+# 9. FEATURE #61 — STORE CREDIT ACCOUNTING
+# ============================================================
+class TestFeature61StoreCreditAccounting:
+    """Feature #61: Verify correct journal entries for store credit refund and redemption."""
+
+    def _setup_with_customer(self, token, biz_id):
+        branch_id = create_branch(token, biz_id)
+        customer_id = create_customer(token, biz_id)
+        product_id = create_product(token, biz_id, name="Goods P", ptype="GOODS")
+        # create_branch already created a warehouse and location (WH-MAIN / LOC-MAIN)
+        # Add opening stock to that location
+        wh_res = client.get(
+            f"/api/v1/businesses/{biz_id}/warehouses",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        wh_id = wh_res.json()[0]["id"]
+        loc_res = client.get(
+            f"/api/v1/businesses/{biz_id}/warehouses/{wh_id}/locations",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        loc_id = loc_res.json()[0]["id"]
+        client.post(
+            f"/api/v1/businesses/{biz_id}/inventory/opening-balance",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"inventory_location_id": loc_id, "product_id": product_id, "quantity": "100"},
+        )
+        return branch_id, customer_id, product_id, loc_id
+
+    def test_store_credit_return_creates_liability_journal(self):
+        """STORE_CREDIT refund on sales return → DR Sales Revenue / CR Store Credit Liability."""
+        token, _ = register_user("f61_ret@test.com")
+        biz_id = create_business(token, "F61 SC Ret")
+        branch_id, customer_id, product_id, loc_id = self._setup_with_customer(token, biz_id)
+
+        # Finalize a sale of 100,000
+        s_res = client.post(
+            f"/api/v1/businesses/{biz_id}/sales",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"customer_id": customer_id, "branch_id": branch_id, "sales_date": datetime.now(timezone.utc).isoformat()},
+        )
+        sales_id = s_res.json()["id"]
+        line_res = client.post(
+            f"/api/v1/businesses/{biz_id}/sales/{sales_id}/lines",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"product_id": product_id, "quantity": "10", "unit_price": "10000"},
+        )
+        sales_line_id = line_res.json()["id"]
+        client.post(
+            f"/api/v1/businesses/{biz_id}/sales/{sales_id}/finalize",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        # Create sales return with STORE_CREDIT refund
+        sr_res = client.post(
+            f"/api/v1/businesses/{biz_id}/sales-returns",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"sales_id": sales_id, "inventory_location_id": loc_id, "refund_destination": "STORE_CREDIT"},
+        )
+        sr_id = sr_res.json()["id"]
+        client.post(
+            f"/api/v1/businesses/{biz_id}/sales-returns/{sr_id}/lines",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"sales_line_id": sales_line_id, "quantity": "5"},
+        )
+        fin = client.post(
+            f"/api/v1/businesses/{biz_id}/sales-returns/{sr_id}/finalize",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert fin.status_code == 200
+
+        # Find the sales return journal
+        journals = client.get(
+            f"/api/v1/businesses/{biz_id}/accounting/journals",
+            headers={"Authorization": f"Bearer {token}"},
+        ).json()["items"]
+        sr_journal = next((j for j in journals if j["reference_type"] == "SALES_RETURN" and j["reference_id"] == sr_id), None)
+        assert sr_journal is not None
+
+        # Verify: DR 4100 Sales Revenue = 50,000, CR 2300 Store Credit Liability = 50,000
+        account_map = {l["account_code"]: l for l in sr_journal["lines"]}
+        assert "4100" in account_map
+        assert Decimal(str(account_map["4100"]["debit"])) == Decimal("50000")
+        assert Decimal(str(account_map["4100"]["credit"])) == Decimal("0")
+        assert "2300" in account_map
+        assert Decimal(str(account_map["2300"]["debit"])) == Decimal("0")
+        assert Decimal(str(account_map["2300"]["credit"])) == Decimal("50000")
+        assert "1200" not in account_map  # AR must NOT appear for STORE_CREDIT
+
+    def test_cash_refund_no_store_credit_liability(self):
+        """CASH refund → DR Sales Revenue / CR AR. No account 2300 touched."""
+        token, _ = register_user("f61_cash@test.com")
+        biz_id = create_business(token, "F61 Cash Ret")
+        branch_id, customer_id, product_id, loc_id = self._setup_with_customer(token, biz_id)
+
+        s_res = client.post(
+            f"/api/v1/businesses/{biz_id}/sales",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"customer_id": customer_id, "branch_id": branch_id, "sales_date": datetime.now(timezone.utc).isoformat()},
+        )
+        sales_id = s_res.json()["id"]
+        line_res = client.post(
+            f"/api/v1/businesses/{biz_id}/sales/{sales_id}/lines",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"product_id": product_id, "quantity": "10", "unit_price": "10000"},
+        )
+        sales_line_id = line_res.json()["id"]
+        client.post(
+            f"/api/v1/businesses/{biz_id}/sales/{sales_id}/finalize",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        # Default CASH refund
+        sr_res = client.post(
+            f"/api/v1/businesses/{biz_id}/sales-returns",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"sales_id": sales_id, "inventory_location_id": loc_id},
+        )
+        sr_id = sr_res.json()["id"]
+        client.post(
+            f"/api/v1/businesses/{biz_id}/sales-returns/{sr_id}/lines",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"sales_line_id": sales_line_id, "quantity": "5"},
+        )
+        fin = client.post(
+            f"/api/v1/businesses/{biz_id}/sales-returns/{sr_id}/finalize",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert fin.status_code == 200
+
+        journals = client.get(
+            f"/api/v1/businesses/{biz_id}/accounting/journals",
+            headers={"Authorization": f"Bearer {token}"},
+        ).json()["items"]
+        sr_journal = next((j for j in journals if j["reference_type"] == "SALES_RETURN" and j["reference_id"] == sr_id), None)
+        assert sr_journal is not None
+
+        account_map = {l["account_code"]: l for l in sr_journal["lines"]}
+        # Must have DR 4100 / CR 1200 (AR)
+        assert "4100" in account_map
+        assert "1200" in account_map
+        # Must NOT have 2300
+        assert "2300" not in account_map
+
+    def test_store_credit_payment_creates_liability_journal(self):
+        """STORE_CREDIT payment → DR 2300 Store Credit Liability / CR 1200 AR."""
+        token, _ = register_user("f61_pay@test.com")
+        biz_id = create_business(token, "F61 SC Pay")
+        branch_id, customer_id, product_id, _ = self._setup_with_customer(token, biz_id)
+
+        s_res = client.post(
+            f"/api/v1/businesses/{biz_id}/sales",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"customer_id": customer_id, "branch_id": branch_id, "sales_date": datetime.now(timezone.utc).isoformat()},
+        )
+        sales_id = s_res.json()["id"]
+        line_res = client.post(
+            f"/api/v1/businesses/{biz_id}/sales/{sales_id}/lines",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"product_id": product_id, "quantity": "5", "unit_price": "10000"},
+        )
+        client.post(
+            f"/api/v1/businesses/{biz_id}/sales/{sales_id}/finalize",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        # Issue store credit to customer
+        issue_res = client.post(
+            f"/api/v1/businesses/{biz_id}/customers/{customer_id}/credit/store-credit/issue",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"amount": "30000", "reason": "Setup for payment test"},
+        )
+        assert issue_res.status_code == 200
+
+        # Pay 30,000 with STORE_CREDIT
+        pay_res = client.post(
+            f"/api/v1/businesses/{biz_id}/payments",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "direction": "CUSTOMER_IN",
+                "target_type": "SALES",
+                "target_id": sales_id,
+                "amount": "30000",
+                "payment_method": "STORE_CREDIT",
+                "customer_id": customer_id,
+            },
+        )
+        assert pay_res.status_code == 201
+        pay_id = pay_res.json()["id"]
+
+        journals = client.get(
+            f"/api/v1/businesses/{biz_id}/accounting/journals",
+            headers={"Authorization": f"Bearer {token}"},
+        ).json()["items"]
+        pay_journal = next((j for j in journals if j["reference_type"] == "PAYMENT" and j["reference_id"] == pay_id), None)
+        assert pay_journal is not None
+
+        account_map = {l["account_code"]: l for l in pay_journal["lines"]}
+        # Verify: DR 2300 Store Credit Liability = 30,000, CR 1200 AR = 30,000
+        assert "2300" in account_map
+        assert Decimal(str(account_map["2300"]["debit"])) == Decimal("30000")
+        assert Decimal(str(account_map["2300"]["credit"])) == Decimal("0")
+        assert "1200" in account_map
+        assert Decimal(str(account_map["1200"]["debit"])) == Decimal("0")
+        assert Decimal(str(account_map["1200"]["credit"])) == Decimal("30000")
+        # Must NOT have 1100 (Cash)
+        assert "1100" not in account_map
+
+    def test_store_credit_liability_account_exists(self):
+        """Account 2300 — Customer Store Credit Liability must exist in Chart of Accounts."""
+        token, _ = register_user("f61_coa@test.com")
+        biz_id = create_business(token, "F61 COA")
+        accounts = client.get(
+            f"/api/v1/businesses/{biz_id}/accounting/accounts",
+            headers={"Authorization": f"Bearer {token}"},
+        ).json()["items"]
+        acc_2300 = next((a for a in accounts if a["code"] == "2300"), None)
+        assert acc_2300 is not None
+        assert acc_2300["name"] == "Customer Store Credit Liability"
+        assert acc_2300["account_type"] == "LIABILITY"
+        assert acc_2300["normal_balance"] == "CREDIT"
+        assert acc_2300["is_system"] is True
+
+    def test_cash_payment_still_uses_1100(self):
+        """CASH payment → DR 1100 / CR 1200. Regression: existing behavior preserved."""
+        token, _ = register_user("f61_cash_pay@test.com")
+        biz_id = create_business(token, "F61 Cash Pay")
+        branch_id, customer_id, product_id, _ = self._setup_with_customer(token, biz_id)
+        cash_id = create_cash_account(token, biz_id)
+        shift_id = open_shift(token, biz_id, branch_id, cash_id)
+
+        s_res = client.post(
+            f"/api/v1/businesses/{biz_id}/sales",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"customer_id": customer_id, "branch_id": branch_id, "sales_date": datetime.now(timezone.utc).isoformat()},
+        )
+        sales_id = s_res.json()["id"]
+        line_res = client.post(
+            f"/api/v1/businesses/{biz_id}/sales/{sales_id}/lines",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"product_id": product_id, "quantity": "5", "unit_price": "10000"},
+        )
+        client.post(
+            f"/api/v1/businesses/{biz_id}/sales/{sales_id}/finalize",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        pay_res = client.post(
+            f"/api/v1/businesses/{biz_id}/payments",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "direction": "CUSTOMER_IN",
+                "target_type": "SALES",
+                "target_id": sales_id,
+                "amount": "50000",
+                "payment_method": "CASH",
+                "cash_account_id": cash_id,
+                "shift_id": shift_id,
+            },
+        )
+        assert pay_res.status_code == 201
+        pay_id = pay_res.json()["id"]
+
+        journals = client.get(
+            f"/api/v1/businesses/{biz_id}/accounting/journals",
+            headers={"Authorization": f"Bearer {token}"},
+        ).json()["items"]
+        pay_journal = next((j for j in journals if j["reference_type"] == "PAYMENT" and j["reference_id"] == pay_id), None)
+        assert pay_journal is not None
+
+        account_map = {l["account_code"]: l for l in pay_journal["lines"]}
+        # CASH must use 1100, not 2300
+        assert "1100" in account_map
+        assert Decimal(str(account_map["1100"]["debit"])) == Decimal("50000")
+        assert Decimal(str(account_map["1100"]["credit"])) == Decimal("0")
+        assert "1200" in account_map
+        assert "2300" not in account_map

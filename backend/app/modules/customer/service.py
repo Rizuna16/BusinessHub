@@ -199,6 +199,8 @@ class CustomerService:
             country=customer.country,
             notes=customer.notes,
             status=customer.status,
+            credit_limit=customer.credit_limit,
+            store_credit_balance=customer.store_credit_balance,
             created_at=customer.created_at.isoformat(),
             updated_at=customer.updated_at.isoformat(),
         )

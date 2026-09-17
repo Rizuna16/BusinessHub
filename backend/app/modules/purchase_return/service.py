@@ -2,6 +2,7 @@ from typing import List, Optional
 from decimal import Decimal
 from datetime import datetime, timezone
 from fastapi import HTTPException, status
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.purchase_return.schemas import (
     PurchaseReturnInDB,
@@ -40,9 +41,21 @@ class PurchaseReturnService:
         self,
         return_repo: AbstractPurchaseReturnRepository = purchase_return_repository,
         membership_service: BusinessMembershipService = business_membership_service,
+        purchase_repo=None,
+        receiving_repo=None,
+        location_repo=None,
+        accounting_integration=None,
+        inv_service=None,
+        session: Optional[AsyncSession] = None,
     ):
         self.return_repo = return_repo
         self.membership_service = membership_service
+        self.purchase_repo = purchase_repo or purchase_repository
+        self.receiving_repo = receiving_repo or receiving_repository
+        self.location_repo = location_repo or inventory_location_repository
+        self.accounting_integration = accounting_integration or accounting_integration_service
+        self.inv_service = inv_service or inventory_service
+        self.session = session
 
     async def _validate_access(
         self,
@@ -59,7 +72,7 @@ class PurchaseReturnService:
         return membership
 
     async def _validate_purchase_finalized(self, business_id: str, purchase_id: str):
-        purchase = await purchase_repository.get_purchase_by_id(purchase_id, business_id)
+        purchase = await self.purchase_repo.get_purchase_by_id(purchase_id, business_id)
         if not purchase:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -78,7 +91,7 @@ class PurchaseReturnService:
         return purchase
 
     async def _validate_location(self, business_id: str, inventory_location_id: str):
-        loc = await inventory_location_repository.get_by_id(inventory_location_id)
+        loc = await self.location_repo.get_by_id(inventory_location_id)
         if not loc or loc.business_id != business_id:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -96,16 +109,7 @@ class PurchaseReturnService:
         Calculate total received quantity from FINALIZED & non-deleted Receivings only for a given purchase_line_id.
         DRAFT, CANCELLED, and deleted Receivings DO NOT contribute to received quantity.
         """
-        total = Decimal("0")
-        for line in receiving_repository._lines.values():
-            if line.purchase_line_id != purchase_line_id:
-                continue
-            rcv = receiving_repository._receivings.get(line.receiving_id)
-            if not rcv or rcv.is_deleted:
-                continue
-            if rcv.status == ReceivingStatus.FINALIZED:
-                total += line.quantity
-        return total
+        return await self.receiving_repo.sum_finalized_received_quantity_for_purchase_line(purchase_line_id)
 
     async def _recalculate_totals(self, business_id: str, return_id: str):
         lines = await self.return_repo.list_lines_for_return(return_id)
@@ -130,6 +134,14 @@ class PurchaseReturnService:
         )
 
     async def create_return(
+        self, business_id: str, user_id: str, payload: PurchaseReturnCreate
+    ) -> PurchaseReturnResponse:
+        if self.session is not None:
+            async with self.session.begin():
+                return await self._create_return_impl(business_id, user_id, payload)
+        return await self._create_return_impl(business_id, user_id, payload)
+
+    async def _create_return_impl(
         self, business_id: str, user_id: str, payload: PurchaseReturnCreate
     ) -> PurchaseReturnResponse:
         await self._validate_access(
@@ -210,6 +222,18 @@ class PurchaseReturnService:
         user_id: str,
         payload: PurchaseReturnUpdate,
     ) -> PurchaseReturnResponse:
+        if self.session is not None:
+            async with self.session.begin():
+                return await self._update_return_impl(business_id, return_id, user_id, payload)
+        return await self._update_return_impl(business_id, return_id, user_id, payload)
+
+    async def _update_return_impl(
+        self,
+        business_id: str,
+        return_id: str,
+        user_id: str,
+        payload: PurchaseReturnUpdate,
+    ) -> PurchaseReturnResponse:
         await self._validate_access(
             business_id, user_id, required_roles=(BusinessMembershipRole.OWNER, BusinessMembershipRole.ADMIN)
         )
@@ -237,6 +261,14 @@ class PurchaseReturnService:
         return PurchaseReturnResponse(**updated.model_dump(), lines=line_resp)
 
     async def delete_return(
+        self, business_id: str, return_id: str, user_id: str
+    ) -> dict:
+        if self.session is not None:
+            async with self.session.begin():
+                return await self._delete_return_impl(business_id, return_id, user_id)
+        return await self._delete_return_impl(business_id, return_id, user_id)
+
+    async def _delete_return_impl(
         self, business_id: str, return_id: str, user_id: str
     ) -> dict:
         await self._validate_access(
@@ -270,6 +302,18 @@ class PurchaseReturnService:
         user_id: str,
         payload: PurchaseReturnLineCreate,
     ) -> PurchaseReturnLineResponse:
+        if self.session is not None:
+            async with self.session.begin():
+                return await self._add_line_impl(business_id, return_id, user_id, payload)
+        return await self._add_line_impl(business_id, return_id, user_id, payload)
+
+    async def _add_line_impl(
+        self,
+        business_id: str,
+        return_id: str,
+        user_id: str,
+        payload: PurchaseReturnLineCreate,
+    ) -> PurchaseReturnLineResponse:
         await self._validate_access(
             business_id, user_id, required_roles=(BusinessMembershipRole.OWNER, BusinessMembershipRole.ADMIN)
         )
@@ -287,7 +331,7 @@ class PurchaseReturnService:
             )
 
         # Validate purchase_line_id belongs to the purchase
-        purchase_line = await purchase_repository.get_line_by_id(payload.purchase_line_id, r.purchase_id)
+        purchase_line = await self.purchase_repo.get_line_by_id(payload.purchase_line_id, r.purchase_id)
         if not purchase_line:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -358,6 +402,19 @@ class PurchaseReturnService:
         user_id: str,
         payload: PurchaseReturnLineUpdate,
     ) -> PurchaseReturnLineResponse:
+        if self.session is not None:
+            async with self.session.begin():
+                return await self._update_line_impl(business_id, return_id, line_id, user_id, payload)
+        return await self._update_line_impl(business_id, return_id, line_id, user_id, payload)
+
+    async def _update_line_impl(
+        self,
+        business_id: str,
+        return_id: str,
+        line_id: str,
+        user_id: str,
+        payload: PurchaseReturnLineUpdate,
+    ) -> PurchaseReturnLineResponse:
         await self._validate_access(
             business_id, user_id, required_roles=(BusinessMembershipRole.OWNER, BusinessMembershipRole.ADMIN)
         )
@@ -381,11 +438,12 @@ class PurchaseReturnService:
                 detail="Purchase return line not found.",
             )
 
-        purchase_line = await purchase_repository.get_line_by_id(line.purchase_line_id, r.purchase_id)
+        purchase_line = await self.purchase_repo.get_line_by_id(line.purchase_line_id, r.purchase_id)
         if not purchase_line:
-            for lid, lval in purchase_repository._lines.items():
-                if lval.id == line.purchase_line_id:
-                    purchase_line = lval
+            purchase_lines = await self.purchase_repo.list_lines_for_purchase(r.purchase_id)
+            for pl in purchase_lines:
+                if pl.id == line.purchase_line_id:
+                    purchase_line = pl
                     break
 
         target_qty = payload.quantity if payload.quantity is not None else line.quantity
@@ -430,6 +488,14 @@ class PurchaseReturnService:
     async def delete_line(
         self, business_id: str, return_id: str, line_id: str, user_id: str
     ) -> dict:
+        if self.session is not None:
+            async with self.session.begin():
+                return await self._delete_line_impl(business_id, return_id, line_id, user_id)
+        return await self._delete_line_impl(business_id, return_id, line_id, user_id)
+
+    async def _delete_line_impl(
+        self, business_id: str, return_id: str, line_id: str, user_id: str
+    ) -> dict:
         await self._validate_access(
             business_id, user_id, required_roles=(BusinessMembershipRole.OWNER, BusinessMembershipRole.ADMIN)
         )
@@ -457,6 +523,14 @@ class PurchaseReturnService:
         return {"message": "Purchase return line successfully deleted."}
 
     async def finalize_return(
+        self, business_id: str, return_id: str, user_id: str
+    ) -> PurchaseReturnResponse:
+        if self.session is not None:
+            async with self.session.begin():
+                return await self._finalize_return_impl(business_id, return_id, user_id)
+        return await self._finalize_return_impl(business_id, return_id, user_id)
+
+    async def _finalize_return_impl(
         self, business_id: str, return_id: str, user_id: str
     ) -> PurchaseReturnResponse:
         await self._validate_access(
@@ -498,15 +572,7 @@ class PurchaseReturnService:
         for pline_id, qty_in_this_return in qty_by_pline.items():
             finalized_received = await self._calculate_effective_finalized_received_quantity(pline_id)
 
-            total_returned_for_pline = Decimal("0")
-            for rl in self.return_repo._lines.values():
-                if rl.purchase_line_id != pline_id:
-                    continue
-                ret_doc = self.return_repo._returns.get(rl.return_id)
-                if not ret_doc or ret_doc.is_deleted:
-                    continue
-                if ret_doc.status in (PurchaseReturnStatus.DRAFT, PurchaseReturnStatus.FINALIZED):
-                    total_returned_for_pline += rl.quantity
+            total_returned_for_pline = await self.return_repo.sum_returned_quantity_for_purchase_line(pline_id)
 
             if total_returned_for_pline > finalized_received:
                 raise HTTPException(
@@ -522,16 +588,16 @@ class PurchaseReturnService:
         return_tax_total = r_updated.tax_total if r_updated else Decimal("0")
 
         # Resolve historical input_vat_creditable from original purchase
-        original_purchase = await purchase_repository.get_purchase_by_id(r.purchase_id, business_id)
+        original_purchase = await self.purchase_repo.get_purchase_by_id(r.purchase_id, business_id)
         input_vat_creditable = original_purchase.input_vat_creditable if original_purchase else False
 
         # ── ATOMIC BOUNDARY START ──
         # Accounting posting FIRST (idempotent, safe to retry).
         # If this fails, NO operational status change occurs.
         idem_key = f"PURCHASE_RETURN:{return_id}:FINALIZED"
-        await accounting_integration_service.safe_post(
+        await self.accounting_integration.safe_post(
             idem_key,
-            lambda: accounting_integration_service.post_purchase_return_finalized(
+            lambda: self.accounting_integration.post_purchase_return_finalized(
                 business_id=business_id,
                 user_id=user_id,
                 purchase_return_id=return_id,
@@ -543,42 +609,64 @@ class PurchaseReturnService:
         )
 
         # Physical stock reduction & cost pool reduction
-        for line in lines:
-            purchase_line = await purchase_repository.get_line_by_id(line.purchase_line_id, r.purchase_id)
-            if not purchase_line:
-                continue
+        # ── AVAILABILITY + LOCK BOUNDARY ──
+        from app.modules.sales_order.availability import availability_service, _inventory_lock
+        _inventory_lock.acquire()
+        try:
+            # Check available_to_sell for each return line under reservation
+            for line in lines:
+                purchase_line = await self.purchase_repo.get_line_by_id(line.purchase_line_id, r.purchase_id)
+                if not purchase_line:
+                    continue
+                physical_qty = await self.inv_service.get_physical_quantity(business_id, line.product_id, line.variant_id)
+                reserved_qty = await availability_service.get_all_reservations_for_product(business_id, line.product_id, line.variant_id)
+                available_qty = physical_qty - reserved_qty
+                if available_qty < Decimal("0"):
+                    available_qty = Decimal("0")
+                if available_qty < line.quantity:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=f"Insufficient available stock for purchase return. Product {line.product_id}: available {available_qty}, return quantity {line.quantity}.",
+                    )
 
-            # Historical acquisition cost
-            if line.unit_price is not None and line.unit_price != purchase_line.unit_price:
-                hist_unit_cost = line.unit_price
-            else:
-                # Reconstruct original acquisition unit cost
-                if creditable_if := original_purchase.input_vat_creditable if original_purchase else False:
-                    orig_net_cost = purchase_line.line_subtotal - purchase_line.discount_amount
+            for line in lines:
+                purchase_line = await self.purchase_repo.get_line_by_id(line.purchase_line_id, r.purchase_id)
+                if not purchase_line:
+                    continue
+
+                # Historical acquisition cost
+                if line.unit_price is not None and line.unit_price != purchase_line.unit_price:
+                    hist_unit_cost = line.unit_price
                 else:
-                    orig_net_cost = purchase_line.line_total
-                hist_unit_cost = orig_net_cost / purchase_line.quantity if purchase_line.quantity > Decimal("0") else Decimal("0")
+                    # Reconstruct original acquisition unit cost
+                    if creditable_if := original_purchase.input_vat_creditable if original_purchase else False:
+                        orig_net_cost = purchase_line.line_subtotal - purchase_line.discount_amount
+                    else:
+                        orig_net_cost = purchase_line.line_total
+                    hist_unit_cost = orig_net_cost / purchase_line.quantity if purchase_line.quantity > Decimal("0") else Decimal("0")
 
-            # Physical stock decrement
-            await inventory_service.balance_repo.upsert_balance(
-                business_id=business_id,
-                inventory_location_id=r.inventory_location_id,
-                product_id=line.product_id,
-                variant_id=line.variant_id,
-                delta=-line.quantity,
-            )
+                # Physical stock decrement
+                await self.inv_service.upsert_balance(
+                    business_id=business_id,
+                    inventory_location_id=r.inventory_location_id,
+                    product_id=line.product_id,
+                    variant_id=line.variant_id,
+                    delta=-line.quantity,
+                )
 
-            # Cost pool reduction
-            await inventory_service.record_cost_outbound(
-                business_id=business_id,
-                product_id=line.product_id,
-                variant_id=line.variant_id,
-                outbound_qty=line.quantity,
-                unit_cost=hist_unit_cost,
-                movement_type=InventoryCostMovementType.PURCHASE_RETURN_OUT,
-                reference_type="PURCHASE_RETURN",
-                reference_id=return_id,
-            )
+                # Cost pool reduction
+                await self.inv_service.record_cost_outbound(
+                    business_id=business_id,
+                    product_id=line.product_id,
+                    variant_id=line.variant_id,
+                    outbound_qty=line.quantity,
+                    unit_cost=hist_unit_cost,
+                    movement_type=InventoryCostMovementType.PURCHASE_RETURN_OUT,
+                    reference_type="PURCHASE_RETURN",
+                    reference_id=return_id,
+                )
+        finally:
+            _inventory_lock.release()
 
         updated = await self.return_repo.update_return(
             return_id=return_id,
@@ -593,6 +681,14 @@ class PurchaseReturnService:
         return PurchaseReturnResponse(**updated.model_dump(), lines=line_resp)
 
     async def cancel_return(
+        self, business_id: str, return_id: str, user_id: str
+    ) -> PurchaseReturnResponse:
+        if self.session is not None:
+            async with self.session.begin():
+                return await self._cancel_return_impl(business_id, return_id, user_id)
+        return await self._cancel_return_impl(business_id, return_id, user_id)
+
+    async def _cancel_return_impl(
         self, business_id: str, return_id: str, user_id: str
     ) -> PurchaseReturnResponse:
         await self._validate_access(

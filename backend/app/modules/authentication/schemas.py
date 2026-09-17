@@ -1,6 +1,11 @@
 from datetime import datetime
+from enum import Enum
 from typing import Optional
 from pydantic import BaseModel, EmailStr, Field, ConfigDict
+
+
+class PlatformRole(str, Enum):
+    SUPER_ADMIN = "SUPER_ADMIN"
 
 
 class UserBase(BaseModel):
@@ -16,6 +21,7 @@ class UserCreate(UserBase):
 class UserResponse(UserBase):
     id: str
     is_active: bool
+    platform_role: Optional[PlatformRole] = None
     created_at: datetime
     updated_at: datetime
 
@@ -39,6 +45,7 @@ class TokenResponse(BaseModel):
 
 class TokenPayload(BaseModel):
     sub: str
+    platform_role: Optional[str] = None
     exp: Optional[int] = None
     iat: Optional[int] = None
     type: str = "access"

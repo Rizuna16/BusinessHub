@@ -84,4 +84,4 @@ The Product Master module provides the core definition of goods and services own
 - Purchase / Sales / Transactions
 - Customer / Supplier
 - Tax Engine / Accounting / BOM
-- Subscription / Billing / Midtrans
+- Subscription / Billing / Manual Bank Transfer

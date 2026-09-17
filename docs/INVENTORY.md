@@ -280,7 +280,7 @@ Feature #13 **tidak** mencakup (dan tidak akan diimplementasikan):
 - Barcode scanning UI
 - Shipping / Receiving workflow
 - Promotion / Discount / Tax
-- Subscription / Billing / Midtrans
+- Subscription / Billing / Manual Bank Transfer
 - Notification / AI assistant
 
 ---

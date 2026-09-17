@@ -17,13 +17,15 @@ from app.modules.expense.schemas import (
     ExpenseCategoryUpdate,
     ExpenseStatus,
     ExpenseCategoryStatus,
+    ExpenseAnalyticsByCategoryResponse,
+    CategoryBreakdownItem,
 )
 from app.modules.expense.repository import (
     AbstractExpenseRepository,
     expense_repository,
 )
 from app.modules.cash_account.repository import cash_account_repository
-from app.modules.cash_account.schemas import CashAccountStatus, CashMovementType, MovementDirection
+from app.modules.cash_account.schemas import CashAccountStatus, CashMovementType, MovementDirection, CashAccountType
 from app.modules.cash_account.service import cash_account_service
 from app.modules.supplier.repository import supplier_repository
 from app.modules.supplier.schemas import SupplierStatus
@@ -33,6 +35,8 @@ from app.modules.business_membership.service import (
 )
 from app.modules.business_membership.schemas import BusinessMembershipRole
 from app.modules.accounting.integration import accounting_integration_service
+from app.modules.cashier_shift.service import cashier_shift_service
+from app.modules.cashier_shift.schemas import ShiftStatus
 
 
 class ExpenseService:
@@ -372,8 +376,17 @@ class ExpenseService:
         await self._validate_category(business_id, exp.category_id)
 
         # 2. Re-validate cash account and post CASH_OUT if specified
+        expense_shift_id = None
         if exp.cash_account_id:
             cash_acc = await self._validate_cash_account(business_id, exp.cash_account_id)
+            
+            # Resolve shift context for CASH account expenses
+            if cash_acc.account_type == CashAccountType.CASH:
+                shift = await cashier_shift_service.shift_repo.get_open_shift(
+                    business_id, exp.cash_account_id
+                )
+                if shift:
+                    expense_shift_id = shift.id
 
             # Check duplicate posting guard (reference_type="EXPENSE", reference_id=expense_id)
             existing_mov = await cash_account_repository.find_movement_by_reference(
@@ -398,31 +411,11 @@ class ExpenseService:
                     reference_type="EXPENSE",
                     reference_id=expense_id,
                     description=f"Expense {exp.expense_number}: {exp.description or ''}".strip(),
+                    shift_id=expense_shift_id,
                 ),
             )
 
         now = datetime.now(timezone.utc)
-
-        # Post cash movement first (with duplicate guard)
-        if exp.cash_account_id:
-            existing_mov = await cash_account_repository.find_movement_by_reference(
-                business_id=business_id, reference_type="EXPENSE", reference_id=expense_id
-            )
-            if not existing_mov:
-                from app.modules.cash_account.schemas import CashMovementCreate
-                await cash_account_service.create_cash_movement(
-                    business_id=business_id,
-                    account_id=exp.cash_account_id,
-                    user_id=user_id,
-                    payload=CashMovementCreate(
-                        movement_type=CashMovementType.EXPENSE,
-                        amount=exp.amount,
-                        direction=MovementDirection.OUT,
-                        reference_type="EXPENSE",
-                        reference_id=expense_id,
-                        description=f"Expense {exp.expense_number}: {exp.description or ''}".strip(),
-                    ),
-                )
 
         updated = await self.expense_repo.update_expense(
             expense_id=expense_id,
@@ -494,18 +487,47 @@ class ExpenseService:
         return await self._build_expense_response(business_id, updated)
 
     async def get_summary(
-        self, business_id: str, user_id: str
+        self, business_id: str, user_id: str,
+        date_from: Optional[datetime] = None,
+        date_to: Optional[datetime] = None,
+        category_id: Optional[str] = None,
     ) -> ExpenseSummaryResponse:
         await self._validate_access(business_id, user_id)
-
+        
+        # Validate date parameters
+        if (date_from is None) != (date_to is None):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Both date_from and date_to must be provided together.",
+            )
+        if date_from and date_to and date_from > date_to:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="date_from must be before or equal to date_to.",
+            )
+        
+        # Validate category_id if provided
+        if category_id:
+            cat = await self.expense_repo.get_category_by_id(category_id, business_id)
+            if not cat:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Expense category not found in this business.",
+                )
+        
         expenses, total = await self.expense_repo.list_expenses(
-            business_id=business_id, page=1, page_size=10000
+            business_id=business_id,
+            category_id=category_id,
+            date_from=date_from,
+            date_to=date_to,
+            page=1,
+            page_size=10000,
         )
-
+        
         total_amount = Decimal("0")
         finalized_cnt = 0
         draft_cnt = 0
-
+        
         for e in expenses:
             if e.currency == "IDR" and e.status == ExpenseStatus.FINALIZED:
                 total_amount += e.amount
@@ -513,13 +535,78 @@ class ExpenseService:
                 finalized_cnt += 1
             elif e.status == ExpenseStatus.DRAFT:
                 draft_cnt += 1
-
+        
         return ExpenseSummaryResponse(
             total_expense_amount=total_amount,
             expense_count=total,
             finalized_count=finalized_cnt,
             draft_count=draft_cnt,
             currency="IDR",
+        )
+
+    async def get_analytics_by_category(
+        self,
+        business_id: str,
+        user_id: str,
+        date_from: datetime,
+        date_to: datetime,
+        category_id: Optional[str] = None,
+    ) -> ExpenseAnalyticsByCategoryResponse:
+        await self._validate_access(business_id, user_id)
+
+        if date_from > date_to:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="date_from must be before or equal to date_to.",
+            )
+
+        if category_id:
+            cat = await self.expense_repo.get_category_by_id(category_id, business_id)
+            if not cat:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Expense category not found in this business.",
+                )
+
+        expenses, _ = await self.expense_repo.list_expenses(
+            business_id=business_id,
+            category_id=category_id,
+            date_from=date_from,
+            date_to=date_to,
+            status=ExpenseStatus.FINALIZED,
+            page=1,
+            page_size=10000,
+        )
+
+        cat_map: dict[str, dict] = {}
+        for e in expenses:
+            cid = e.category_id
+            if cid not in cat_map:
+                c = await self.expense_repo.get_category_by_id(cid, business_id)
+                cat_map[cid] = {
+                    "category_id": cid,
+                    "category_code": c.code if c else "UNKNOWN",
+                    "category_name": c.name if c else "Unknown",
+                    "total": Decimal("0"),
+                    "expense_count": 0,
+                }
+            cat_map[cid]["total"] += e.amount
+            cat_map[cid]["expense_count"] += 1
+
+        categories = [
+            CategoryBreakdownItem(**v) for v in cat_map.values()
+        ]
+        categories.sort(key=lambda x: (-x.total, x.category_name, x.category_id or ""))
+
+        overall_total = sum((c.total for c in categories), Decimal("0"))
+        overall_count = sum(c.expense_count for c in categories)
+
+        return ExpenseAnalyticsByCategoryResponse(
+            date_from=date_from,
+            date_to=date_to,
+            total=overall_total,
+            expense_count=overall_count,
+            categories=categories,
         )
 
 

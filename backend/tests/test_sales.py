@@ -147,7 +147,13 @@ def _create_customer(client, token, biz_id, name="Walk-in Customer"):
         json={"name": name, "customer_type": "INDIVIDUAL"},
     )
     assert res.status_code == 201
-    return res.json()["id"]
+    cid = res.json()["id"]
+    client.put(
+        f"/api/v1/businesses/{biz_id}/customers/{cid}/credit/limit",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"credit_limit": "100000000.00"},
+    )
+    return cid
 
 
 def _create_product(client, token, biz_id, unit_id, name="Product Goods", code=None, p_type="GOODS"):

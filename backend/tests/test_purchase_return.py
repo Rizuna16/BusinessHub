@@ -19,6 +19,65 @@ from app.modules.inventory.repository import InMemoryStockBalanceRepository, InM
 from app.modules.receiving.repository import InMemoryReceivingRepository
 from app.modules.purchase_return.repository import InMemoryPurchaseReturnRepository
 
+# Override production PostgreSQL router wiring with InMemory services
+from app.modules.purchase_return.router import get_scoped_purchase_return_service
+from app.modules.receiving.router import get_scoped_receiving_service
+from app.modules.purchase.router import get_scoped_purchase_service
+from app.modules.business.router import get_scoped_business_service
+from app.modules.business_membership.router import get_scoped_membership_service
+from app.modules.purchase_return.service import PurchaseReturnService
+from app.modules.receiving.service import ReceivingService
+from app.modules.purchase.service import PurchaseService
+from app.modules.business_membership.service import BusinessMembershipService
+from app.modules.business.service import BusinessService
+from app.modules.subscription.service import SubscriptionService
+
+
+def _inmemory_purchase_return_service():
+    """InMemory-wired PurchaseReturnService for unit testing."""
+    membership_svc = BusinessMembershipService()
+    return PurchaseReturnService(membership_service=membership_svc)
+
+
+def _inmemory_receiving_service():
+    """InMemory-wired ReceivingService for unit testing."""
+    membership_svc = BusinessMembershipService()
+    return ReceivingService(membership_service=membership_svc)
+
+
+def _inmemory_purchase_service():
+    """InMemory-wired PurchaseService for unit testing."""
+    membership_svc = BusinessMembershipService()
+    return PurchaseService(membership_service=membership_svc)
+
+
+def _inmemory_business_service():
+    """InMemory-wired BusinessService for unit testing."""
+    membership_svc = BusinessMembershipService()
+    subscription_svc = SubscriptionService()
+    return BusinessService(membership_service=membership_svc, subscription_service_instance=subscription_svc)
+
+
+def _inmemory_membership_service():
+    """InMemory-wired BusinessMembershipService for unit testing."""
+    return BusinessMembershipService()
+
+
+@pytest.fixture(autouse=True)
+def setup_test_environment():
+    """Override production scoped services with InMemory for unit tests."""
+    app.dependency_overrides[get_scoped_purchase_return_service] = _inmemory_purchase_return_service
+    app.dependency_overrides[get_scoped_receiving_service] = _inmemory_receiving_service
+    app.dependency_overrides[get_scoped_purchase_service] = _inmemory_purchase_service
+    app.dependency_overrides[get_scoped_business_service] = _inmemory_business_service
+    app.dependency_overrides[get_scoped_membership_service] = _inmemory_membership_service
+    yield
+    app.dependency_overrides.pop(get_scoped_purchase_return_service, None)
+    app.dependency_overrides.pop(get_scoped_receiving_service, None)
+    app.dependency_overrides.pop(get_scoped_purchase_service, None)
+    app.dependency_overrides.pop(get_scoped_business_service, None)
+    app.dependency_overrides.pop(get_scoped_membership_service, None)
+
 client = TestClient(app)
 
 

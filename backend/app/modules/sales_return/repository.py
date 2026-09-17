@@ -21,6 +21,7 @@ class AbstractSalesReturnRepository(ABC):
         return_number: str,
         return_date: datetime,
         created_by_user_id: str,
+        refund_destination: str = "CASH",
         notes: Optional[str] = None,
     ) -> SalesReturnInDB:
         pass
@@ -79,6 +80,8 @@ class AbstractSalesReturnRepository(ABC):
         tax_amount: Decimal,
         line_subtotal: Decimal,
         line_total: Decimal,
+        delivery_note_id: Optional[str] = None,
+        delivery_note_line_id: Optional[str] = None,
     ) -> SalesReturnLineInDB:
         pass
 
@@ -103,6 +106,8 @@ class AbstractSalesReturnRepository(ABC):
         tax_amount: Decimal,
         line_subtotal: Decimal,
         line_total: Decimal,
+        delivery_note_id: Optional[str] = None,
+        delivery_note_line_id: Optional[str] = None,
     ) -> Optional[SalesReturnLineInDB]:
         pass
 
@@ -112,6 +117,18 @@ class AbstractSalesReturnRepository(ABC):
 
     @abstractmethod
     async def sum_returned_quantity_for_sales_line(
+        self, sales_line_id: str
+    ) -> Decimal:
+        pass
+
+    @abstractmethod
+    async def sum_returned_quantity_for_delivery_note_line(
+        self, delivery_note_line_id: str
+    ) -> Decimal:
+        pass
+
+    @abstractmethod
+    async def sum_unlinked_returned_quantity_for_sales_line(
         self, sales_line_id: str
     ) -> Decimal:
         pass
@@ -141,6 +158,7 @@ class InMemorySalesReturnRepository(AbstractSalesReturnRepository):
         return_number: str,
         return_date: datetime,
         created_by_user_id: str,
+        refund_destination: str = "CASH",
         notes: Optional[str] = None,
     ) -> SalesReturnInDB:
         return_id = str(uuid.uuid4())
@@ -153,6 +171,7 @@ class InMemorySalesReturnRepository(AbstractSalesReturnRepository):
             return_number=return_number,
             return_date=return_date,
             status=SalesReturnStatus.DRAFT,
+            refund_destination=refund_destination,
             notes=notes,
             subtotal=Decimal("0"),
             discount_total=Decimal("0"),
@@ -263,6 +282,8 @@ class InMemorySalesReturnRepository(AbstractSalesReturnRepository):
         tax_amount: Decimal,
         line_subtotal: Decimal,
         line_total: Decimal,
+        delivery_note_id: Optional[str] = None,
+        delivery_note_line_id: Optional[str] = None,
     ) -> SalesReturnLineInDB:
         line_id = str(uuid.uuid4())
         now = datetime.now(timezone.utc)
@@ -278,6 +299,8 @@ class InMemorySalesReturnRepository(AbstractSalesReturnRepository):
             tax_amount=tax_amount,
             line_subtotal=line_subtotal,
             line_total=line_total,
+            delivery_note_id=delivery_note_id,
+            delivery_note_line_id=delivery_note_line_id,
             created_at=now,
             updated_at=now,
         )
@@ -307,6 +330,8 @@ class InMemorySalesReturnRepository(AbstractSalesReturnRepository):
         tax_amount: Decimal,
         line_subtotal: Decimal,
         line_total: Decimal,
+        delivery_note_id: Optional[str] = None,
+        delivery_note_line_id: Optional[str] = None,
     ) -> Optional[SalesReturnLineInDB]:
         l = await self.get_line_by_id(line_id, sales_return_id)
         if not l:
@@ -319,6 +344,10 @@ class InMemorySalesReturnRepository(AbstractSalesReturnRepository):
         data["tax_amount"] = tax_amount
         data["line_subtotal"] = line_subtotal
         data["line_total"] = line_total
+        if delivery_note_id is not None:
+            data["delivery_note_id"] = delivery_note_id
+        if delivery_note_line_id is not None:
+            data["delivery_note_line_id"] = delivery_note_line_id
         data["updated_at"] = datetime.now(timezone.utc)
 
         updated = SalesReturnLineInDB(**data)
@@ -338,6 +367,36 @@ class InMemorySalesReturnRepository(AbstractSalesReturnRepository):
         total = Decimal("0")
         for l in self._lines.values():
             if l.sales_line_id != sales_line_id:
+                continue
+            r = self._returns.get(l.sales_return_id)
+            if not r:
+                continue
+            if r.status in (SalesReturnStatus.DRAFT, SalesReturnStatus.FINALIZED):
+                total += l.quantity
+        return total
+
+    async def sum_returned_quantity_for_delivery_note_line(
+        self, delivery_note_line_id: str
+    ) -> Decimal:
+        total = Decimal("0")
+        for l in self._lines.values():
+            if l.delivery_note_line_id != delivery_note_line_id:
+                continue
+            r = self._returns.get(l.sales_return_id)
+            if not r:
+                continue
+            if r.status in (SalesReturnStatus.DRAFT, SalesReturnStatus.FINALIZED):
+                total += l.quantity
+        return total
+
+    async def sum_unlinked_returned_quantity_for_sales_line(
+        self, sales_line_id: str
+    ) -> Decimal:
+        total = Decimal("0")
+        for l in self._lines.values():
+            if l.sales_line_id != sales_line_id:
+                continue
+            if l.delivery_note_line_id is not None:
                 continue
             r = self._returns.get(l.sales_return_id)
             if not r:

@@ -390,7 +390,7 @@ The following are **not** implemented:
 | Purchase / Sales price | Deferred |
 | Promotion / Discount  | Deferred |
 | Tax / Accounting / COGS | Implemented (Feature #37 Tax, Feature #33/#34 Accounting, Feature #38 COGS) |
-| Subscription / Billing / Midtrans | Deferred |
+| Subscription / Billing / Manual Bank Transfer | Deferred |
 | Hotel / Restaurant / Production | Deferred |
 | Database migration framework | Deferred |
 | Docker / Git commit / push | Deferred |

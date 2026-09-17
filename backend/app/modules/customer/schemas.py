@@ -1,5 +1,6 @@
 from enum import Enum
 from typing import Optional
+from decimal import Decimal
 from pydantic import BaseModel, Field, ConfigDict, field_validator
 import re
 
@@ -27,6 +28,8 @@ class CustomerBase(BaseModel):
     postal_code: Optional[str] = Field(None, max_length=20)
     country: Optional[str] = Field(None, max_length=100)
     notes: Optional[str] = Field(None, max_length=1000)
+    credit_limit: Decimal = Field(default=Decimal("0.00"), ge=0)
+    store_credit_balance: Decimal = Field(default=Decimal("0.00"), ge=0)
 
     model_config = ConfigDict(extra="forbid")
 
@@ -77,6 +80,8 @@ class CustomerUpdate(BaseModel):
     postal_code: Optional[str] = Field(None, max_length=20)
     country: Optional[str] = Field(None, max_length=100)
     notes: Optional[str] = Field(None, max_length=1000)
+    credit_limit: Optional[Decimal] = Field(None, ge=0)
+    store_credit_balance: Optional[Decimal] = Field(None, ge=0)
 
     model_config = ConfigDict(extra="forbid")
 
@@ -128,6 +133,8 @@ class CustomerResponse(BaseModel):
     country: Optional[str] = None
     notes: Optional[str] = None
     status: CustomerStatus
+    credit_limit: Decimal = Decimal("0.00")
+    store_credit_balance: Decimal = Decimal("0.00")
     created_at: str
     updated_at: str
 

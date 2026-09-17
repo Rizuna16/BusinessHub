@@ -693,9 +693,8 @@ def test_architectural_boundaries(client):
 
     # 48. No cash account mutation / dependency
     # 49. No gateway call
-    # 50. No Midtrans dependency (field verification)
+    # 50. No external gateway dependency (field verification)
     p_data = p_res.json()
-    assert "midtrans_transaction_id" not in p_data
     assert "cash_account_id" not in p_data
 
 

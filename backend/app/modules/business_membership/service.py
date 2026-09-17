@@ -1,5 +1,6 @@
 from typing import List, Optional
 from fastapi import HTTPException, status
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.business_membership.schemas import (
     BusinessMembershipInDB,
@@ -15,6 +16,8 @@ from app.modules.business_membership.repository import (
 )
 from app.modules.authentication.repository import user_repository, AbstractUserRepository
 from app.modules.account.repository import account_repository, AbstractAccountRepository
+from app.modules.business.repository import business_repository, AbstractBusinessRepository
+from app.modules.business.schemas import BusinessStatus
 
 
 class BusinessMembershipService:
@@ -23,10 +26,14 @@ class BusinessMembershipService:
         repository: AbstractBusinessMembershipRepository = business_membership_repository,
         user_repo: AbstractUserRepository = user_repository,
         account_repo: AbstractAccountRepository = account_repository,
+        business_repo: AbstractBusinessRepository = business_repository,
+        session: Optional[AsyncSession] = None,
     ):
         self.repository = repository
         self.user_repo = user_repo
         self.account_repo = account_repo
+        self.business_repo = business_repo
+        self.session = session
 
     async def create_owner_membership(self, business_id: str, user_id: str) -> BusinessMembershipInDB:
         """Create the mandatory initial OWNER membership when a Business is created."""
@@ -52,13 +59,27 @@ class BusinessMembershipService:
     async def require_active_membership(
         self, business_id: str, user_id: str
     ) -> BusinessMembershipInDB:
-        """Enforce active membership or raise 404 (for anti-enumeration / access denial)."""
+        """Enforce active membership or raise 404/403 (for anti-enumeration / access denial)."""
         membership = await self.get_active_membership(business_id, user_id)
         if not membership:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Business not found or access denied.",
             )
+
+        business = await self.business_repo.get_by_id(business_id)
+        if business:
+            if business.status == BusinessStatus.SUSPENDED:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Business is suspended.",
+                )
+            elif business.status == BusinessStatus.ARCHIVED:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Business is archived.",
+                )
+
         return membership
 
     async def _enrich_membership(
@@ -83,6 +104,14 @@ class BusinessMembershipService:
         )
 
     async def add_member(
+        self, requester_id: str, business_id: str, payload: AddBusinessMemberInput
+    ) -> BusinessMembershipResponse:
+        if self.session is not None:
+            async with self.session.begin():
+                return await self._add_member_impl(requester_id, business_id, payload)
+        return await self._add_member_impl(requester_id, business_id, payload)
+
+    async def _add_member_impl(
         self, requester_id: str, business_id: str, payload: AddBusinessMemberInput
     ) -> BusinessMembershipResponse:
         requester_membership = await self.require_active_membership(business_id, requester_id)
@@ -170,6 +199,18 @@ class BusinessMembershipService:
         membership_id: str,
         payload: UpdateBusinessMemberInput,
     ) -> BusinessMembershipResponse:
+        if self.session is not None:
+            async with self.session.begin():
+                return await self._update_member_impl(requester_id, business_id, membership_id, payload)
+        return await self._update_member_impl(requester_id, business_id, membership_id, payload)
+
+    async def _update_member_impl(
+        self,
+        requester_id: str,
+        business_id: str,
+        membership_id: str,
+        payload: UpdateBusinessMemberInput,
+    ) -> BusinessMembershipResponse:
         requester_membership = await self.require_active_membership(business_id, requester_id)
 
         if requester_membership.role not in (BusinessMembershipRole.OWNER, BusinessMembershipRole.ADMIN):
@@ -200,9 +241,6 @@ class BusinessMembershipService:
                 detail="Cannot promote a member to OWNER. A business must have exactly one OWNER.",
             )
 
-        # 3. ADMIN cannot modify another ADMIN or OWNER if restrictions apply, but minimum requirement:
-        # ADMIN can update non-owner member. If target is OWNER, blocked above.
-        
         updated = await self.repository.update(
             membership_id=membership_id,
             role=payload.role,

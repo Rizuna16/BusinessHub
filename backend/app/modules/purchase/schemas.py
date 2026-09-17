@@ -220,3 +220,55 @@ class PurchaseListResponse(BaseModel):
     page: int
     page_size: int
     total: int
+
+
+# --- Purchase Analytics Schemas ---
+
+class PurchaseAnalyticsSummaryResponse(BaseModel):
+    date_from: datetime
+    date_to: datetime
+    gross_purchases: Decimal
+    purchase_returns: Decimal
+    net_purchases: Decimal
+    discount_total: Decimal
+    tax_total: Decimal
+    purchase_count: int
+    average_purchase_value: Decimal
+
+
+class PurchaseSupplierBreakdownItem(BaseModel):
+    supplier_id: str
+    supplier_code: str
+    supplier_name: str
+    gross_purchases: Decimal
+    purchase_returns: Decimal
+    net_purchases: Decimal
+    purchase_count: int
+
+
+class PurchaseAnalyticsBySupplierResponse(BaseModel):
+    date_from: datetime
+    date_to: datetime
+    gross_purchases: Decimal
+    purchase_returns: Decimal
+    net_purchases: Decimal
+    suppliers: List[PurchaseSupplierBreakdownItem]
+
+
+class PurchaseCategoryBreakdownItem(BaseModel):
+    category_id: Optional[str] = None
+    category_code: str
+    category_name: str
+    gross_purchases: Decimal
+    purchase_returns: Decimal
+    net_purchases: Decimal
+    purchase_count: int
+
+
+class PurchaseAnalyticsByCategoryResponse(BaseModel):
+    date_from: datetime
+    date_to: datetime
+    gross_purchases: Decimal
+    purchase_returns: Decimal
+    net_purchases: Decimal
+    categories: List[PurchaseCategoryBreakdownItem]

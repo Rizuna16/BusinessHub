@@ -50,7 +50,10 @@ class AuthenticationService:
                 detail="User account is inactive."
             )
 
-        access_token = self.security.create_access_token(data={"sub": user.id})
+        access_token = self.security.create_access_token(data={
+            "sub": user.id,
+            "platform_role": user.platform_role.value if user.platform_role else None
+        })
         return TokenResponse(
             access_token=access_token,
             token_type="bearer",

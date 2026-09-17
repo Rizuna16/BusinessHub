@@ -11,9 +11,16 @@ class SalesReturnStatus(str, Enum):
     CANCELLED = "CANCELLED"
 
 
+class SalesReturnRefundDestination(str, Enum):
+    CASH = "CASH"
+    STORE_CREDIT = "STORE_CREDIT"
+
+
 class SalesReturnLineCreate(BaseModel):
     sales_line_id: str = Field(..., min_length=1)
     quantity: Decimal = Field(..., gt=0)
+    delivery_note_id: Optional[str] = Field(None, min_length=1)
+    delivery_note_line_id: Optional[str] = Field(None, min_length=1)
 
     model_config = ConfigDict(extra="forbid")
 
@@ -23,10 +30,20 @@ class SalesReturnLineCreate(BaseModel):
         if v <= Decimal("0"):
             raise ValueError("Quantity must be greater than 0")
         return v
+
+    @field_validator("delivery_note_id", "delivery_note_line_id")
+    @classmethod
+    def validate_dn_refs(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None:
+            v = v.strip()
+            return v if v else None
+        return None
 
 
 class SalesReturnLineUpdate(BaseModel):
     quantity: Decimal = Field(..., gt=0)
+    delivery_note_id: Optional[str] = Field(None, min_length=1)
+    delivery_note_line_id: Optional[str] = Field(None, min_length=1)
 
     model_config = ConfigDict(extra="forbid")
 
@@ -36,6 +53,14 @@ class SalesReturnLineUpdate(BaseModel):
         if v <= Decimal("0"):
             raise ValueError("Quantity must be greater than 0")
         return v
+
+    @field_validator("delivery_note_id", "delivery_note_line_id")
+    @classmethod
+    def validate_dn_refs(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None:
+            v = v.strip()
+            return v if v else None
+        return None
 
 
 class SalesReturnLineInDB(BaseModel):
@@ -50,6 +75,8 @@ class SalesReturnLineInDB(BaseModel):
     tax_amount: Decimal
     line_subtotal: Decimal
     line_total: Decimal
+    delivery_note_id: Optional[str] = None
+    delivery_note_line_id: Optional[str] = None
     created_at: datetime
     updated_at: datetime
 
@@ -63,16 +90,20 @@ class SalesReturnLineResponse(SalesReturnLineInDB):
 class SalesReturnCreate(BaseModel):
     sales_id: str = Field(..., min_length=1)
     inventory_location_id: Optional[str] = Field(None, min_length=1)
+    refund_destination: Optional[str] = Field("CASH", pattern="^(CASH|STORE_CREDIT)$")
     notes: Optional[str] = Field(None, max_length=1000)
 
     model_config = ConfigDict(extra="forbid")
 
-    @field_validator("notes")
+    @field_validator("refund_destination")
     @classmethod
-    def validate_notes(cls, v: Optional[str]) -> Optional[str]:
-        if v is not None:
-            return v.strip() if v.strip() else None
-        return None
+    def validate_destination(cls, v: Optional[str]) -> str:
+        if v is None:
+            return "CASH"
+        v = v.strip().upper()
+        if v not in ("CASH", "STORE_CREDIT"):
+            raise ValueError("refund_destination must be CASH or STORE_CREDIT.")
+        return v
 
     @field_validator("inventory_location_id")
     @classmethod
@@ -103,6 +134,7 @@ class SalesReturnInDB(BaseModel):
     return_number: str
     return_date: datetime
     status: SalesReturnStatus
+    refund_destination: str = "CASH"
     notes: Optional[str] = None
     subtotal: Decimal
     discount_total: Decimal

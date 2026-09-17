@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { apiClient } from '../services/apiClient';
 import { Card } from '../components/ui/Card';
 import { Input } from '../components/ui/Input';
 import { Button } from '../components/ui/Button';
@@ -27,7 +28,12 @@ export const Login: React.FC = () => {
     try {
       setIsSubmitting(true);
       await login({ email, password });
-      navigate('/app');
+      const userData = await apiClient.getMe();
+      if (userData.platform_role === 'SUPER_ADMIN') {
+        navigate('/platform/dashboard');
+      } else {
+        navigate('/app');
+      }
     } catch (err: any) {
       setError(err.message || 'Login failed. Please try again.');
     } finally {

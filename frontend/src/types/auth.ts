@@ -1,8 +1,11 @@
+export type PlatformRole = 'SUPER_ADMIN' | null;
+
 export interface User {
   id: string;
   email: string;
   full_name: string;
   is_active: boolean;
+  platform_role: PlatformRole;
   created_at: string;
   updated_at: string;
 }

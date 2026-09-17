@@ -1,7 +1,10 @@
 from typing import List
 from fastapi import APIRouter, Depends, HTTPException, Path, status
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.core.database import get_db_session
+from app.core.container import RepositoryContainer
 from app.modules.authentication.router import get_current_user
 from app.modules.authentication.schemas import UserResponse
 from app.modules.business_membership.schemas import (
@@ -26,11 +29,26 @@ def get_membership_service() -> BusinessMembershipService:
     return business_membership_service
 
 
+async def get_scoped_membership_service(session: AsyncSession = Depends(get_db_session)) -> BusinessMembershipService:
+    """
+    Request-scoped BusinessMembershipService wired to the same AsyncSession.
+    All repositories share the same AsyncSession for consistency.
+    """
+    container = RepositoryContainer(session)
+    return BusinessMembershipService(
+        repository=container.business_membership,
+        user_repo=container.user,
+        account_repo=container.account,
+        business_repo=container.business,
+        session=session,
+    )
+
+
 # Reusable Guards for Business Endpoints
 async def require_business_membership(
     business_id: str = Path(...),
     current_user: UserResponse = Depends(get_current_user),
-    service: BusinessMembershipService = Depends(get_membership_service),
+    service: BusinessMembershipService = Depends(get_scoped_membership_service),
 ) -> BusinessMembershipInDB:
     """Dependency ensuring requester has an ACTIVE membership in the specified business."""
     return await service.require_active_membership(business_id, current_user.id)
@@ -72,7 +90,7 @@ async def add_member(
     payload: AddBusinessMemberInput,
     business_id: str = Path(...),
     current_user: UserResponse = Depends(get_current_user),
-    service: BusinessMembershipService = Depends(get_membership_service),
+    service: BusinessMembershipService = Depends(get_scoped_membership_service),
 ) -> BusinessMembershipResponse:
     """
     Add a new member to the business.
@@ -89,7 +107,7 @@ async def add_member(
 async def list_members(
     business_id: str = Path(...),
     current_user: UserResponse = Depends(get_current_user),
-    service: BusinessMembershipService = Depends(get_membership_service),
+    service: BusinessMembershipService = Depends(get_scoped_membership_service),
 ) -> List[BusinessMembershipResponse]:
     """
     List members of the business.
@@ -106,7 +124,7 @@ async def get_member(
     business_id: str = Path(...),
     membership_id: str = Path(...),
     current_user: UserResponse = Depends(get_current_user),
-    service: BusinessMembershipService = Depends(get_membership_service),
+    service: BusinessMembershipService = Depends(get_scoped_membership_service),
 ) -> BusinessMembershipResponse:
     """
     Get a specific membership in the business.
@@ -125,7 +143,7 @@ async def update_member(
     business_id: str = Path(...),
     membership_id: str = Path(...),
     current_user: UserResponse = Depends(get_current_user),
-    service: BusinessMembershipService = Depends(get_membership_service),
+    service: BusinessMembershipService = Depends(get_scoped_membership_service),
 ) -> BusinessMembershipResponse:
     """
     Update member role or status.
@@ -145,7 +163,7 @@ async def remove_member(
     business_id: str = Path(...),
     membership_id: str = Path(...),
     current_user: UserResponse = Depends(get_current_user),
-    service: BusinessMembershipService = Depends(get_membership_service),
+    service: BusinessMembershipService = Depends(get_scoped_membership_service),
 ) -> BusinessMembershipResponse:
     """
     Soft-remove a member (status set to REMOVED).

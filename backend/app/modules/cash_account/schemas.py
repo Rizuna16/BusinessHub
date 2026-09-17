@@ -132,6 +132,7 @@ class CashMovementCreate(BaseModel):
     reference_type: Optional[str] = Field(None, max_length=50)
     reference_id: Optional[str] = Field(None, max_length=100)
     description: Optional[str] = Field(None, max_length=1000)
+    shift_id: Optional[str] = Field(None, max_length=100)
 
     model_config = ConfigDict(extra="forbid")
 
@@ -170,6 +171,7 @@ class CashMovementInDB(BaseModel):
     reference_id: Optional[str] = None
     description: Optional[str] = None
     performed_by_user_id: str
+    shift_id: Optional[str] = None
     status: CashMovementStatus
     created_at: datetime
     updated_at: datetime

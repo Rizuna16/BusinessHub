@@ -269,6 +269,8 @@ class InventoryCostMovementType(str, Enum):
     SALE_RETURN_IN = "SALE_RETURN_IN"
     OPENING_BALANCE = "OPENING_BALANCE"
     OPNAME_SYNC = "OPNAME_SYNC"
+    TRANSFER_OUT = "TRANSFER_OUT"
+    TRANSFER_IN = "TRANSFER_IN"
 
 
 class InventoryCostMovementInDB(BaseModel):

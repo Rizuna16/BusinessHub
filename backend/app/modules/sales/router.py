@@ -15,6 +15,9 @@ from app.modules.sales.schemas import (
     SalesLineCreate,
     SalesLineUpdate,
     SalesStatus,
+    SalesAnalyticsSummaryResponse,
+    SalesAnalyticsByCategoryResponse,
+    SalesAnalyticsByCustomerResponse,
 )
 from app.modules.sales.service import (
     SalesService,
@@ -153,3 +156,71 @@ async def cancel_sales(
     service: SalesService = Depends(get_sales_service),
 ) -> SalesResponse:
     return await service.cancel_sales(business_id, sales_id, current_user.id)
+
+
+# --- Sales Analytics ---
+
+@router.get("/analytics/summary", response_model=SalesAnalyticsSummaryResponse, status_code=status.HTTP_200_OK)
+async def get_sales_analytics_summary(
+    business_id: str = Path(...),
+    date_from: datetime = Query(...),
+    date_to: datetime = Query(...),
+    category_id: Optional[str] = Query(None),
+    customer_id: Optional[str] = Query(None),
+    branch_id: Optional[str] = Query(None),
+    current_user: UserResponse = Depends(get_current_user),
+    service: SalesService = Depends(get_sales_service),
+):
+    return await service.get_sales_analytics_summary(
+        business_id=business_id,
+        user_id=current_user.id,
+        date_from=date_from,
+        date_to=date_to,
+        category_id=category_id,
+        customer_id=customer_id,
+        branch_id=branch_id,
+    )
+
+
+@router.get("/analytics/by-category", response_model=SalesAnalyticsByCategoryResponse, status_code=status.HTTP_200_OK)
+async def get_sales_analytics_by_category(
+    business_id: str = Path(...),
+    date_from: datetime = Query(...),
+    date_to: datetime = Query(...),
+    category_id: Optional[str] = Query(None),
+    customer_id: Optional[str] = Query(None),
+    branch_id: Optional[str] = Query(None),
+    current_user: UserResponse = Depends(get_current_user),
+    service: SalesService = Depends(get_sales_service),
+):
+    return await service.get_sales_analytics_by_category(
+        business_id=business_id,
+        user_id=current_user.id,
+        date_from=date_from,
+        date_to=date_to,
+        category_id=category_id,
+        customer_id=customer_id,
+        branch_id=branch_id,
+    )
+
+
+@router.get("/analytics/by-customer", response_model=SalesAnalyticsByCustomerResponse, status_code=status.HTTP_200_OK)
+async def get_sales_analytics_by_customer(
+    business_id: str = Path(...),
+    date_from: datetime = Query(...),
+    date_to: datetime = Query(...),
+    category_id: Optional[str] = Query(None),
+    customer_id: Optional[str] = Query(None),
+    branch_id: Optional[str] = Query(None),
+    current_user: UserResponse = Depends(get_current_user),
+    service: SalesService = Depends(get_sales_service),
+):
+    return await service.get_sales_analytics_by_customer(
+        business_id=business_id,
+        user_id=current_user.id,
+        date_from=date_from,
+        date_to=date_to,
+        category_id=category_id,
+        customer_id=customer_id,
+        branch_id=branch_id,
+    )
