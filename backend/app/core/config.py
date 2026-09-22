@@ -21,8 +21,8 @@ class Settings(BaseSettings):
         "http://127.0.0.1:5174",
     ]
     cors_allow_credentials: bool = True
-    cors_allow_methods: List[str] = ["*"]
-    cors_allow_headers: List[str] = ["*"]
+    cors_allow_methods: List[str] = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
+    cors_allow_headers: List[str] = ["Authorization", "Content-Type", "Accept", "Origin", "X-Requested-With"]
 
     jwt_secret_key: str
     jwt_algorithm: str = "HS256"
@@ -37,6 +37,9 @@ class Settings(BaseSettings):
     dev_seed_superadmin_name: str = "Platform Super Admin"
 
     database_url: str = ""
+
+    upload_dir: str = "uploads"
+    max_upload_size_mb: int = 5
 
 
 settings = Settings()
