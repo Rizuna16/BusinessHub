@@ -640,6 +640,72 @@ class ApiClient {
   }
 
   // ============================================================
+  // Product Images (Feature #65)
+  // ============================================================
+  public async listProductImages(
+    businessId: string,
+    productId: string,
+    variantId?: string | null
+  ): Promise<{ items: import('@/types/product').ProductImage[]; total: number }> {
+    const params = new URLSearchParams();
+    if (variantId) params.set('variant_id', variantId);
+    const qs = params.toString();
+    return this.request<{ items: import('@/types/product').ProductImage[]; total: number }>(
+      `/businesses/${businessId}/products/${productId}/images${qs ? `?${qs}` : ''}`,
+      { method: 'GET' }
+    );
+  }
+
+  public async uploadProductImage(
+    businessId: string,
+    productId: string,
+    formData: FormData,
+    variantId?: string | null
+  ): Promise<import('@/types/product').ProductImage> {
+    const params = new URLSearchParams();
+    if (variantId) params.set('variant_id', variantId);
+    const qs = params.toString();
+
+    const headers: Record<string, string> = {};
+    if (this.token) {
+      headers['Authorization'] = `Bearer ${this.token}`;
+    }
+    // Do NOT set Content-Type so browser sets multipart/form-data with boundary
+
+    const response = await fetch(`${API_BASE_URL}/businesses/${businessId}/products/${productId}/images${qs ? `?${qs}` : ''}`, {
+      method: 'POST',
+      headers,
+      body: formData,
+    });
+
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(data.message || data.detail || 'Failed to upload image');
+    }
+    return data as import('@/types/product').ProductImage;
+  }
+
+  public async setPrimaryProductImage(
+    businessId: string,
+    imageId: string
+  ): Promise<import('@/types/product').ProductImage> {
+    return this.request<import('@/types/product').ProductImage>(
+      `/businesses/${businessId}/products/images/${imageId}/primary`,
+      { method: 'POST' }
+    );
+  }
+
+  public async archiveProductImage(
+    businessId: string,
+    imageId: string
+  ): Promise<import('@/types/product').ProductImage> {
+    return this.request<import('@/types/product').ProductImage>(
+      `/businesses/${businessId}/products/images/${imageId}`,
+      { method: 'DELETE' }
+    );
+  }
+
+  // ============================================================
   // Barcode
   // ============================================================
   public async listBarcodes(

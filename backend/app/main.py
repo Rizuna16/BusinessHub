@@ -53,6 +53,7 @@ from app.modules.export.router import router as export_router
 from app.modules.transfer.router import router as transfer_router
 from app.modules.customer_credit.router import router as customer_credit_router
 from app.modules.inventory_batch.router import router as inventory_batch_router
+from app.modules.product_image.router import router as product_image_router
 from app.shared.utils import log_startup, format_datetime_iso
 
 @asynccontextmanager
@@ -239,6 +240,9 @@ def create_app() -> FastAPI:
     )
     app.include_router(
         inventory_batch_router,
+    )
+    app.include_router(
+        product_image_router,
     )
 
     # Root endpoint

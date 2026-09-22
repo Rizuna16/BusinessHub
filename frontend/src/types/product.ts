@@ -72,6 +72,24 @@ export interface ProductVariantListResponse {
   total: number;
 }
 
+export interface ProductImage {
+  id: string;
+  business_id: string;
+  product_id: string;
+  variant_id: string | null;
+  storage_key: string;
+  original_filename: string;
+  mime_type: string;
+  file_size: number;
+  width: number | null;
+  height: number | null;
+  sort_order: number;
+  is_primary: boolean;
+  status: string;
+  created_at: string;
+  updated_at: string;
+}
+
 // Barcode
 export type BarcodeType = 'EAN13' | 'EAN8' | 'UPC_A' | 'CODE128' | 'OTHER';
 export type BarcodeStatus = 'ACTIVE' | 'ARCHIVED';

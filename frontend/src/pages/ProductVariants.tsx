@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { apiClient } from '@/services/apiClient';
-import type { Product, ProductVariant, ProductVariantCreate, ProductVariantUpdate } from '@/types/product';
+import type { Product, ProductVariant, ProductVariantCreate, ProductVariantUpdate, ProductImage } from '@/types/product';
 import type { BusinessMembership } from '@/types/businessMembership';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
@@ -19,6 +19,7 @@ export const ProductVariants: React.FC = () => {
   const [product, setProduct] = useState<Product | null>(null);
   const [variants, setVariants] = useState<ProductVariant[]>([]);
   const [role, setRole] = useState<string | null>(null);
+  const [variantImages, setVariantImages] = useState<Record<string, ProductImage>>({});
 
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -59,6 +60,21 @@ export const ProductVariants: React.FC = () => {
 
       setProduct(prod);
       setVariants(vars.items);
+
+      // Fetch primary images for variants
+      const imagesMap: Record<string, ProductImage> = {};
+      await Promise.all(
+        vars.items.map(async (v) => {
+          try {
+            const imgRes = await apiClient.listProductImages(businessId, productId, v.id);
+            const primary = imgRes.items.find((i) => i.is_primary) || imgRes.items[0];
+            if (primary) imagesMap[v.id] = primary;
+          } catch {
+            // ignore - image fetch is optional
+          }
+        })
+      );
+      setVariantImages(imagesMap);
     } catch (err: any) {
       setError(err.message || 'Failed to load variants.');
     } finally {
@@ -148,6 +164,18 @@ export const ProductVariants: React.FC = () => {
     }
   };
 
+  const handleUploadVariantImage = async (variantId: string, file: File) => {
+    if (!businessId || !productId) return;
+    const formData = new FormData();
+    formData.append('file', file);
+    try {
+      const img = await apiClient.uploadProductImage(businessId, productId, formData, variantId);
+      setVariantImages((prev) => ({ ...prev, [variantId]: img }));
+    } catch (err: any) {
+      alert(err.message || 'Failed to upload image.');
+    }
+  };
+
   if (isLoading) {
     return <Loading text="Loading variants..." />;
   }
@@ -224,6 +252,7 @@ export const ProductVariants: React.FC = () => {
             <table className="w-full text-left text-sm text-slate-600 dark:text-slate-300">
               <thead className="bg-slate-50 dark:bg-slate-800/80 border-b border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 uppercase text-xs">
                 <tr>
+                  <th scope="col" className="px-6 py-3 font-semibold">Image</th>
                   <th scope="col" className="px-6 py-3 font-semibold">Variant</th>
                   <th scope="col" className="px-6 py-3 font-semibold">Code</th>
                   <th scope="col" className="px-6 py-3 font-semibold">Attributes</th>
@@ -234,6 +263,32 @@ export const ProductVariants: React.FC = () => {
               <tbody className="divide-y divide-slate-100 dark:divide-slate-700/60">
                 {variants.map((variant) => (
                   <tr key={variant.id} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/50">
+                    <td className="px-6 py-4">
+                      <div className="flex items-center gap-2">
+                        <div className={`w-8 h-8 rounded flex items-center justify-center ${variantImages[variant.id] ? 'bg-emerald-100 dark:bg-emerald-900/30' : 'bg-slate-100 dark:bg-slate-700'}`}>
+                          {variantImages[variant.id] ? (
+                            <span className="text-emerald-600 dark:text-emerald-400 text-sm">IMG</span>
+                          ) : (
+                            <span className="text-xs text-slate-400">--</span>
+                          )}
+                        </div>
+                        {canManage && (
+                          <label className="cursor-pointer text-xs text-indigo-600 hover:text-indigo-800 dark:text-indigo-400">
+                            Upload
+                            <input
+                              type="file"
+                              accept="image/jpeg,image/png,image/webp"
+                              className="hidden"
+                              onChange={(e) => {
+                                const file = e.target.files?.[0];
+                                if (file) handleUploadVariantImage(variant.id, file);
+                                e.target.value = '';
+                              }}
+                            />
+                          </label>
+                        )}
+                      </div>
+                    </td>
                     <td className="px-6 py-4 font-semibold text-slate-900 dark:text-slate-100">{variant.name}</td>
                     <td className="px-6 py-4 font-mono text-xs text-slate-700 dark:text-slate-300">{variant.code}</td>
                     <td className="px-6 py-4">
