@@ -13,6 +13,8 @@ from app.modules.pricing.schemas import (
     PriceListListResponse,
     PriceListResponse,
     PriceListUpdate,
+    DiscountRuleCreate,
+    DiscountRuleUpdate,
 )
 from app.modules.pricing.service import PricingService, pricing_service
 
@@ -155,3 +157,77 @@ async def archive_price_entry(
     return await service.archive_price_entry(
         business_id, price_list_id, price_id, current_user.id
     )
+
+
+# Discount Rule Endpoints
+
+
+@router.get("/discount-rules")
+async def list_discount_rules(
+    business_id: str,
+    current_user: UserResponse = Depends(get_current_user),
+    service: PricingService = Depends(get_pricing_service),
+    include_archived: bool = Query(False),
+):
+    return await service.discount_rule_list(business_id, current_user.id, include_archived)
+
+
+@router.post("/discount-rules", status_code=status.HTTP_201_CREATED)
+async def create_discount_rule(
+    business_id: str,
+    data: DiscountRuleCreate,
+    current_user: UserResponse = Depends(get_current_user),
+    service: PricingService = Depends(get_pricing_service),
+):
+    return await service.discount_rule_create(business_id, current_user.id, data)
+
+
+@router.get("/discount-rules/{rule_id}")
+async def get_discount_rule(
+    business_id: str,
+    rule_id: str,
+    current_user: UserResponse = Depends(get_current_user),
+    service: PricingService = Depends(get_pricing_service),
+):
+    return await service.discount_rule_get(business_id, current_user.id, rule_id)
+
+
+@router.put("/discount-rules/{rule_id}")
+async def update_discount_rule(
+    business_id: str,
+    rule_id: str,
+    data: DiscountRuleUpdate,
+    current_user: UserResponse = Depends(get_current_user),
+    service: PricingService = Depends(get_pricing_service),
+):
+    return await service.discount_rule_update(business_id, current_user.id, rule_id, data)
+
+
+@router.delete("/discount-rules/{rule_id}")
+async def archive_discount_rule(
+    business_id: str,
+    rule_id: str,
+    current_user: UserResponse = Depends(get_current_user),
+    service: PricingService = Depends(get_pricing_service),
+):
+    return await service.discount_rule_archive(business_id, current_user.id, rule_id)
+
+
+@router.post("/discount-rules/{rule_id}/activate")
+async def activate_discount_rule(
+    business_id: str,
+    rule_id: str,
+    current_user: UserResponse = Depends(get_current_user),
+    service: PricingService = Depends(get_pricing_service),
+):
+    return await service.discount_rule_activate(business_id, current_user.id, rule_id)
+
+
+@router.post("/discount-rules/{rule_id}/deactivate")
+async def deactivate_discount_rule(
+    business_id: str,
+    rule_id: str,
+    current_user: UserResponse = Depends(get_current_user),
+    service: PricingService = Depends(get_pricing_service),
+):
+    return await service.discount_rule_deactivate(business_id, current_user.id, rule_id)

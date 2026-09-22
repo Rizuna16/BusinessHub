@@ -3,6 +3,7 @@ from decimal import Decimal
 from datetime import datetime, timezone
 import uuid
 from fastapi import HTTPException, status
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.sales_order.schemas import (
     QuotationInDB,
@@ -55,10 +56,12 @@ class QuotationService:
         quotation_repo: AbstractQuotationRepository = quotation_repository,
         sales_order_repo: AbstractSalesOrderRepository = sales_order_repository,
         membership_service: BusinessMembershipService = business_membership_service,
+        session: Optional[AsyncSession] = None,
     ):
         self.quotation_repo = quotation_repo
         self.sales_order_repo = sales_order_repo
         self.membership_service = membership_service
+        self.session = session
 
     async def _validate_access(
         self,
@@ -209,6 +212,28 @@ class QuotationService:
         return QuotationResponse(**q.model_dump(), lines=lines)
 
     async def create_quotation(self, business_id: str, user_id: str, payload: QuotationCreate) -> QuotationResponse:
+        if self.session is not None:
+            async with self.session.begin():
+                return await self._create_quotation_with_retry(business_id, user_id, payload)
+        else:
+            return await self._create_quotation_with_retry(business_id, user_id, payload)
+
+    async def _create_quotation_with_retry(self, business_id: str, user_id: str, payload: QuotationCreate) -> QuotationResponse:
+        for attempt in range(3):
+            try:
+                if self.session is not None:
+                    async with self.session.begin_nested():
+                        return await self._create_quotation_impl(business_id, user_id, payload)
+                else:
+                    return await self._create_quotation_impl(business_id, user_id, payload)
+            except Exception as e:
+                err_str = str(e).lower()
+                if ("unique" in err_str and ("quotation_number" in err_str or "uq_quotation" in err_str)) and attempt < 2:
+                    continue
+                raise
+        raise HTTPException(status_code=409, detail="Document number collision; please retry")
+
+    async def _create_quotation_impl(self, business_id: str, user_id: str, payload: QuotationCreate) -> QuotationResponse:
         await self._validate_access(business_id, user_id, required_roles=(BusinessMembershipRole.OWNER, BusinessMembershipRole.ADMIN))
         await self._validate_customer(business_id, payload.customer_id)
         await self._validate_branch(business_id, payload.branch_id)
@@ -289,13 +314,36 @@ class QuotationService:
         if q.status not in (QuotationStatus.DRAFT,):
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot add lines to non-DRAFT quotation.")
         resolved_product_id, resolved_variant_id = await self._validate_product_and_variant(business_id, payload.product_id, payload.variant_id)
+        # Feature #64: Server-authoritative discount evaluation
+        from app.modules.pricing.service import PricingService
+        from datetime import datetime, timezone as tz
+        from decimal import Decimal as D
+        pricing_svc = PricingService()
+        auto_discount, rule_id, rule_name = await pricing_svc.evaluate_discount(
+            business_id=business_id,
+            product_id=resolved_product_id,
+            variant_id=resolved_variant_id,
+            quantity=payload.quantity,
+            unit_price=payload.unit_price,
+            transaction_currency="IDR",
+            evaluation_time=datetime.now(tz.utc),
+        )
+        if auto_discount > D("0"):
+            final_discount = auto_discount
+            final_rule_id = rule_id
+            final_rule_name = rule_name
+        else:
+            final_discount = payload.discount_amount
+            final_rule_id = None
+            final_rule_name = None
         line_subtotal = payload.quantity * payload.unit_price
-        line_total = line_subtotal - payload.discount_amount + payload.tax_amount
+        line_total = line_subtotal - final_discount + payload.tax_amount
         line = await self.quotation_repo.create_line(
             quotation_id=quotation_id, product_id=resolved_product_id, variant_id=resolved_variant_id,
             description=payload.description, quantity=payload.quantity, unit_price=payload.unit_price,
-            discount_amount=payload.discount_amount, tax_amount=payload.tax_amount,
+            discount_amount=final_discount, tax_amount=payload.tax_amount,
             line_subtotal=line_subtotal, line_total=line_total,
+            discount_rule_id=final_rule_id, discount_rule_name_snapshot=final_rule_name,
         )
         await self._recalculate_totals(business_id, quotation_id)
         return QuotationLineResponse(**line.model_dump())
@@ -320,14 +368,37 @@ class QuotationService:
         target_price = payload.unit_price if payload.unit_price is not None else line.unit_price
         target_disc = payload.discount_amount if payload.discount_amount is not None else line.discount_amount
         target_tax = payload.tax_amount if payload.tax_amount is not None else line.tax_amount
+        # Feature #64: Server-authoritative discount evaluation on update
+        from app.modules.pricing.service import PricingService
+        from datetime import datetime, timezone as tz
+        from decimal import Decimal as D
+        pricing_svc = PricingService()
+        auto_discount, rule_id, rule_name = await pricing_svc.evaluate_discount(
+            business_id=business_id,
+            product_id=resolved_product_id,
+            variant_id=resolved_variant_id,
+            quantity=target_qty,
+            unit_price=target_price,
+            transaction_currency="IDR",
+            evaluation_time=datetime.now(tz.utc),
+        )
+        if auto_discount > D("0"):
+            final_discount = auto_discount
+            final_rule_id = rule_id
+            final_rule_name = rule_name
+        else:
+            final_discount = target_disc
+            final_rule_id = None
+            final_rule_name = None
         line_subtotal = target_qty * target_price
-        line_total = line_subtotal - target_disc + target_tax
+        line_total = line_subtotal - final_discount + target_tax
         updated_line = await self.quotation_repo.update_line(
             line_id=line_id, quotation_id=quotation_id,
             product_id=resolved_product_id, variant_id=resolved_variant_id,
             description=payload.description, quantity=payload.quantity,
-            unit_price=payload.unit_price, discount_amount=payload.discount_amount,
+            unit_price=payload.unit_price, discount_amount=final_discount,
             tax_amount=payload.tax_amount, line_subtotal=line_subtotal, line_total=line_total,
+            discount_rule_id=final_rule_id, discount_rule_name_snapshot=final_rule_name,
         )
         await self._recalculate_totals(business_id, quotation_id)
         return QuotationLineResponse(**updated_line.model_dump())
@@ -346,6 +417,13 @@ class QuotationService:
         return {"message": "Quotation line successfully deleted."}
 
     async def send_quotation(self, business_id: str, quotation_id: str, user_id: str) -> QuotationResponse:
+        if self.session is not None:
+            async with self.session.begin():
+                return await self._send_quotation_impl(business_id, quotation_id, user_id)
+        else:
+            return await self._send_quotation_impl(business_id, quotation_id, user_id)
+
+    async def _send_quotation_impl(self, business_id: str, quotation_id: str, user_id: str) -> QuotationResponse:
         await self._validate_access(business_id, user_id, required_roles=(BusinessMembershipRole.OWNER, BusinessMembershipRole.ADMIN))
         q = await self.quotation_repo.get_quotation_by_id(quotation_id, business_id)
         if not q:
@@ -364,6 +442,13 @@ class QuotationService:
         return await self._build_response(business_id, updated)
 
     async def accept_quotation(self, business_id: str, quotation_id: str, user_id: str) -> QuotationResponse:
+        if self.session is not None:
+            async with self.session.begin():
+                return await self._accept_quotation_impl(business_id, quotation_id, user_id)
+        else:
+            return await self._accept_quotation_impl(business_id, quotation_id, user_id)
+
+    async def _accept_quotation_impl(self, business_id: str, quotation_id: str, user_id: str) -> QuotationResponse:
         await self._validate_access(business_id, user_id, required_roles=(BusinessMembershipRole.OWNER, BusinessMembershipRole.ADMIN))
         q = await self.quotation_repo.get_quotation_by_id(quotation_id, business_id)
         if not q:
@@ -378,6 +463,13 @@ class QuotationService:
         return await self._build_response(business_id, updated)
 
     async def reject_quotation(self, business_id: str, quotation_id: str, user_id: str) -> QuotationResponse:
+        if self.session is not None:
+            async with self.session.begin():
+                return await self._reject_quotation_impl(business_id, quotation_id, user_id)
+        else:
+            return await self._reject_quotation_impl(business_id, quotation_id, user_id)
+
+    async def _reject_quotation_impl(self, business_id: str, quotation_id: str, user_id: str) -> QuotationResponse:
         await self._validate_access(business_id, user_id, required_roles=(BusinessMembershipRole.OWNER, BusinessMembershipRole.ADMIN))
         q = await self.quotation_repo.get_quotation_by_id(quotation_id, business_id)
         if not q:
@@ -392,6 +484,13 @@ class QuotationService:
         return await self._build_response(business_id, updated)
 
     async def cancel_quotation(self, business_id: str, quotation_id: str, user_id: str) -> QuotationResponse:
+        if self.session is not None:
+            async with self.session.begin():
+                return await self._cancel_quotation_impl(business_id, quotation_id, user_id)
+        else:
+            return await self._cancel_quotation_impl(business_id, quotation_id, user_id)
+
+    async def _cancel_quotation_impl(self, business_id: str, quotation_id: str, user_id: str) -> QuotationResponse:
         await self._validate_access(business_id, user_id, required_roles=(BusinessMembershipRole.OWNER, BusinessMembershipRole.ADMIN))
         q = await self.quotation_repo.get_quotation_by_id(quotation_id, business_id)
         if not q:
@@ -408,6 +507,13 @@ class QuotationService:
         return await self._build_response(business_id, updated)
 
     async def convert_quotation(self, business_id: str, quotation_id: str, user_id: str, payload: QuotationConvert) -> dict:
+        if self.session is not None:
+            async with self.session.begin():
+                return await self._convert_quotation_impl(business_id, quotation_id, user_id, payload)
+        else:
+            return await self._convert_quotation_impl(business_id, quotation_id, user_id, payload)
+
+    async def _convert_quotation_impl(self, business_id: str, quotation_id: str, user_id: str, payload: QuotationConvert) -> dict:
         await self._validate_access(business_id, user_id, required_roles=(BusinessMembershipRole.OWNER, BusinessMembershipRole.ADMIN))
         q = await self.quotation_repo.get_quotation_by_id(quotation_id, business_id)
         if not q:
@@ -449,6 +555,8 @@ class QuotationService:
                 tax_amount=ql.tax_amount,
                 line_subtotal=line_subtotal,
                 line_total=line_total,
+                discount_rule_id=getattr(ql, 'discount_rule_id', None),
+                discount_rule_name_snapshot=getattr(ql, 'discount_rule_name_snapshot', None),
             )
 
         updated_q = await self.quotation_repo.update_quotation(

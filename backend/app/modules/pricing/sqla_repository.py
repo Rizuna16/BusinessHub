@@ -4,7 +4,7 @@ from typing import Optional, List
 from sqlalchemy import select, func, and_, desc, asc
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.pricing.models import PriceList, PriceEntry
+from app.modules.pricing.models import PriceList, PriceEntry, DiscountRule as DiscountRuleModel
 from app.modules.pricing.repository import (
     AbstractPriceListRepository,
     AbstractPriceEntryRepository,
@@ -338,6 +338,92 @@ class SQLAlchemyPriceEntryRepository(AbstractPriceEntryRepository):
         )
         res = await self.session.execute(stmt)
         return (res.scalar_one() or 0) > 0
+
+    @classmethod
+    def clear(cls):
+        pass
+
+
+def _to_discount_rule(obj: DiscountRuleModel) -> "DiscountRuleInDB":
+    from app.modules.pricing.schemas import DiscountRuleInDB
+    return DiscountRuleInDB(
+        id=obj.id,
+        business_id=obj.business_id,
+        name=obj.name,
+        description=obj.description,
+        type=obj.type,
+        value=obj.value,
+        product_id=obj.product_id,
+        variant_id=obj.variant_id,
+        starts_at=obj.starts_at,
+        ends_at=obj.ends_at,
+        priority=obj.priority,
+        status=obj.status,
+        created_at=obj.created_at,
+        updated_at=obj.updated_at,
+    )
+
+
+class SQLAlchemyDiscountRuleRepository:
+    def __init__(self, session: AsyncSession):
+        self.session = session
+
+    async def create(self, business_id: str, data: dict) -> "DiscountRuleInDB":
+        obj = await sa_create(self.session, DiscountRuleModel, {
+            "business_id": business_id,
+            **data,
+        })
+        return _to_discount_rule(obj)
+
+    async def get_by_id(self, rule_id: str, business_id: str) -> Optional["DiscountRuleInDB"]:
+        stmt = select(DiscountRuleModel).where(
+            DiscountRuleModel.id == rule_id,
+            DiscountRuleModel.business_id == business_id,
+        )
+        res = await self.session.execute(stmt)
+        obj = res.scalar_one_or_none()
+        return _to_discount_rule(obj) if obj else None
+
+    async def list_by_business(self, business_id: str, include_archived: bool = False) -> List["DiscountRuleInDB"]:
+        filters = [DiscountRuleModel.business_id == business_id]
+        if not include_archived:
+            filters.append(DiscountRuleModel.status != "ARCHIVED")
+        stmt = select(DiscountRuleModel).where(and_(*filters)).order_by(
+            asc(DiscountRuleModel.priority), asc(DiscountRuleModel.id)
+        )
+        res = await self.session.execute(stmt)
+        return [_to_discount_rule(o) for o in res.scalars().all()]
+
+    async def update(self, rule_id: str, business_id: str, updates: dict) -> Optional["DiscountRuleInDB"]:
+        stmt = select(DiscountRuleModel).where(
+            DiscountRuleModel.id == rule_id,
+            DiscountRuleModel.business_id == business_id,
+        )
+        res = await self.session.execute(stmt)
+        obj = res.scalar_one_or_none()
+        if not obj:
+            return None
+        for k, v in updates.items():
+            if v is not None and hasattr(obj, k):
+                setattr(obj, k, v)
+        await self.session.flush()
+        return _to_discount_rule(obj)
+
+    async def update_status(self, rule_id: str, business_id: str, status: str) -> Optional["DiscountRuleInDB"]:
+        return await self.update(rule_id, business_id, {"status": status})
+
+    async def delete(self, rule_id: str, business_id: str) -> bool:
+        stmt = select(DiscountRuleModel).where(
+            DiscountRuleModel.id == rule_id,
+            DiscountRuleModel.business_id == business_id,
+        )
+        res = await self.session.execute(stmt)
+        obj = res.scalar_one_or_none()
+        if not obj:
+            return False
+        await self.session.delete(obj)
+        await self.session.flush()
+        return True
 
     @classmethod
     def clear(cls):

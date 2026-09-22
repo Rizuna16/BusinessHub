@@ -1,4 +1,6 @@
 from typing import List, Optional
+from decimal import Decimal
+from datetime import datetime
 from fastapi import HTTPException, status
 
 from app.modules.business_membership.schemas import BusinessMembershipRole
@@ -9,8 +11,10 @@ from app.modules.business_membership.service import (
 from app.modules.pricing.repository import (
     AbstractPriceEntryRepository,
     AbstractPriceListRepository,
+    AbstractDiscountRuleRepository,
     price_entry_repository,
     price_list_repository,
+    discount_rule_repository,
 )
 from app.modules.pricing.schemas import (
     PriceEntryCreate,
@@ -41,12 +45,14 @@ class PricingService:
         self,
         price_list_repo: AbstractPriceListRepository = price_list_repository,
         price_entry_repo: AbstractPriceEntryRepository = price_entry_repository,
+        discount_rule_repo: AbstractDiscountRuleRepository = discount_rule_repository,
         membership_service: BusinessMembershipService = business_membership_service,
         product_repo: AbstractProductRepository = product_repository,
         variant_repo: AbstractProductVariantRepository = product_variant_repository,
     ):
         self.price_list_repo = price_list_repo
         self.price_entry_repo = price_entry_repo
+        self.discount_rule_repo = discount_rule_repo
         self.membership_service = membership_service
         self.product_repo = product_repo
         self.variant_repo = variant_repo
@@ -349,6 +355,158 @@ class PricingService:
 
         archived = await self.price_entry_repo.archive(price_id, business_id)
         return PriceEntryResponse.from_db(archived)
+
+    # ── Discount Rule CRUD ────────────────────────────────────────────
+
+    async def discount_rule_create(
+        self, business_id: str, user_id: str, data: "DiscountRuleCreate"
+    ) -> "DiscountRuleResponse":
+        from app.modules.pricing.schemas import DiscountRuleResponse
+        await self._require_admin_or_owner(business_id, user_id)
+
+        # Validate product/variant ownership
+        if data.product_id:
+            product = await self.product_repo.get_by_id(data.product_id, business_id)
+            if not product:
+                raise HTTPException(status_code=404, detail="Product not found in this business.")
+        if data.variant_id:
+            variant = await self.variant_repo.get_by_id(data.variant_id, business_id)
+            if not variant:
+                raise HTTPException(status_code=404, detail="Variant not found in this business.")
+
+        rule = await self.discount_rule_repo.create(business_id, data.model_dump())
+        return DiscountRuleResponse.model_validate(rule)
+
+    async def discount_rule_get(
+        self, business_id: str, user_id: str, rule_id: str
+    ) -> "DiscountRuleResponse":
+        from app.modules.pricing.schemas import DiscountRuleResponse
+        await self._require_active_membership(business_id, user_id)
+        rule = await self.discount_rule_repo.get_by_id(rule_id, business_id)
+        if not rule:
+            raise HTTPException(status_code=404, detail="Discount rule not found.")
+        return DiscountRuleResponse.model_validate(rule)
+
+    async def discount_rule_list(
+        self, business_id: str, user_id: str, include_archived: bool = False
+    ) -> "DiscountRuleListResponse":
+        from app.modules.pricing.schemas import DiscountRuleResponse, DiscountRuleListResponse
+        await self._require_active_membership(business_id, user_id)
+        rules = await self.discount_rule_repo.list_by_business(business_id, include_archived)
+        return DiscountRuleListResponse(
+            items=[DiscountRuleResponse.model_validate(r) for r in rules],
+            total=len(rules),
+        )
+
+    async def discount_rule_update(
+        self, business_id: str, user_id: str, rule_id: str, data: "DiscountRuleUpdate"
+    ) -> "DiscountRuleResponse":
+        from app.modules.pricing.schemas import DiscountRuleResponse
+        await self._require_admin_or_owner(business_id, user_id)
+        updates = data.model_dump(exclude_unset=True)
+        if not updates:
+            raise HTTPException(status_code=400, detail="No fields to update.")
+        rule = await self.discount_rule_repo.update(rule_id, business_id, updates)
+        if not rule:
+            raise HTTPException(status_code=404, detail="Discount rule not found.")
+        return DiscountRuleResponse.model_validate(rule)
+
+    async def discount_rule_archive(
+        self, business_id: str, user_id: str, rule_id: str
+    ) -> "DiscountRuleResponse":
+        from app.modules.pricing.schemas import DiscountRuleResponse
+        await self._require_admin_or_owner(business_id, user_id)
+        rule = await self.discount_rule_repo.update_status(rule_id, business_id, "ARCHIVED")
+        if not rule:
+            raise HTTPException(status_code=404, detail="Discount rule not found.")
+        return DiscountRuleResponse.model_validate(rule)
+
+    async def discount_rule_activate(
+        self, business_id: str, user_id: str, rule_id: str
+    ) -> "DiscountRuleResponse":
+        from app.modules.pricing.schemas import DiscountRuleResponse
+        await self._require_admin_or_owner(business_id, user_id)
+        rule = await self.discount_rule_repo.update_status(rule_id, business_id, "ACTIVE")
+        if not rule:
+            raise HTTPException(status_code=404, detail="Discount rule not found.")
+        return DiscountRuleResponse.model_validate(rule)
+
+    async def discount_rule_deactivate(
+        self, business_id: str, user_id: str, rule_id: str
+    ) -> "DiscountRuleResponse":
+        from app.modules.pricing.schemas import DiscountRuleResponse
+        await self._require_admin_or_owner(business_id, user_id)
+        rule = await self.discount_rule_repo.update_status(rule_id, business_id, "INACTIVE")
+        if not rule:
+            raise HTTPException(status_code=404, detail="Discount rule not found.")
+        return DiscountRuleResponse.model_validate(rule)
+
+    # ── Discount Evaluation ───────────────────────────────────────────
+
+    async def evaluate_discount(
+        self, business_id: str, product_id: str, variant_id: Optional[str],
+        quantity: Decimal, unit_price: Decimal, transaction_currency: str,
+        evaluation_time: datetime,
+    ) -> tuple[Decimal, Optional[str], Optional[str]]:
+        """
+        Evaluate applicable discount rule for a sales line.
+        Returns: (discount_amount, rule_id, rule_name)
+        """
+        from decimal import ROUND_HALF_UP
+
+        commercial_subtotal = quantity * unit_price
+        if commercial_subtotal <= Decimal("0"):
+            return Decimal("0"), None, None
+
+        rules = await self.discount_rule_repo.list_by_business(business_id)
+        now = evaluation_time
+
+        eligible = []
+        for rule in rules:
+            if rule.status != "ACTIVE":
+                continue
+            if rule.starts_at > now:
+                continue
+            if rule.ends_at is not None and now >= rule.ends_at:
+                continue
+            # Scope match
+            if rule.product_id and rule.product_id != product_id:
+                continue
+            if rule.variant_id and rule.variant_id != variant_id:
+                continue
+            eligible.append(rule)
+
+        if not eligible:
+            return Decimal("0"), None, None
+
+        # Currency validation for fixed discounts
+        for rule in eligible[:]:
+            if rule.type == "FIXED":
+                rule_currency = getattr(rule, 'currency', 'IDR')
+                if rule_currency != transaction_currency:
+                    eligible.remove(rule)
+
+        if not eligible:
+            return Decimal("0"), None, None
+
+        # Sort by priority ASC, then id ASC for deterministic tie-break
+        eligible.sort(key=lambda r: (r.priority, r.id))
+        winner = eligible[0]
+
+        if winner.type == "PERCENTAGE":
+            raw = commercial_subtotal * winner.value / Decimal("100")
+            discount = raw.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        else:  # FIXED
+            discount = winner.value
+
+        # Cap at commercial subtotal
+        if discount > commercial_subtotal:
+            discount = commercial_subtotal
+
+        if discount < Decimal("0"):
+            discount = Decimal("0")
+
+        return discount, winner.id, winner.name
 
 
 pricing_service = PricingService()

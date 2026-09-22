@@ -42,7 +42,7 @@ class AbstractQuotationRepository(ABC):
         pass
 
     @abstractmethod
-    async def create_line(self, quotation_id: str, product_id: str, variant_id: Optional[str], description: Optional[str], quantity: Decimal, unit_price: Decimal, discount_amount: Decimal, tax_amount: Decimal, line_subtotal: Decimal, line_total: Decimal) -> QuotationLineInDB:
+    async def create_line(self, quotation_id: str, product_id: str, variant_id: Optional[str], description: Optional[str], quantity: Decimal, unit_price: Decimal, discount_amount: Decimal, tax_amount: Decimal, line_subtotal: Decimal, line_total: Decimal, discount_rule_id: Optional[str] = None, discount_rule_name_snapshot: Optional[str] = None) -> QuotationLineInDB:
         pass
 
     @abstractmethod
@@ -183,6 +183,8 @@ class InMemoryQuotationRepository(AbstractQuotationRepository):
         tax_amount: Decimal,
         line_subtotal: Decimal,
         line_total: Decimal,
+        discount_rule_id: Optional[str] = None,
+        discount_rule_name_snapshot: Optional[str] = None,
     ) -> QuotationLineInDB:
         lid = str(uuid.uuid4())
         now = datetime.now(timezone.utc)
@@ -195,6 +197,8 @@ class InMemoryQuotationRepository(AbstractQuotationRepository):
             quantity=quantity,
             unit_price=unit_price,
             discount_amount=discount_amount,
+            discount_rule_id=discount_rule_id,
+            discount_rule_name_snapshot=discount_rule_name_snapshot,
             tax_amount=tax_amount,
             line_subtotal=line_subtotal,
             line_total=line_total,
@@ -253,6 +257,10 @@ class AbstractSalesOrderRepository(ABC):
         pass
 
     @abstractmethod
+    async def get_sales_order_for_update(self, order_id: str, business_id: str) -> Optional[SalesOrderInDB]:
+        pass
+
+    @abstractmethod
     async def get_order_by_number(self, business_id: str, order_number: str) -> Optional[SalesOrderInDB]:
         pass
 
@@ -269,7 +277,7 @@ class AbstractSalesOrderRepository(ABC):
         pass
 
     @abstractmethod
-    async def create_line(self, sales_order_id: str, product_id: str, variant_id: Optional[str], description: Optional[str], quantity_ordered: Decimal, unit_price: Decimal, discount_amount: Decimal, tax_amount: Decimal, line_subtotal: Decimal, line_total: Decimal) -> SalesOrderLineInDB:
+    async def create_line(self, sales_order_id: str, product_id: str, variant_id: Optional[str], description: Optional[str], quantity_ordered: Decimal, unit_price: Decimal, discount_amount: Decimal, tax_amount: Decimal, line_subtotal: Decimal, line_total: Decimal, discount_rule_id: Optional[str] = None, discount_rule_name_snapshot: Optional[str] = None) -> SalesOrderLineInDB:
         pass
 
     @abstractmethod
@@ -340,6 +348,9 @@ class InMemorySalesOrderRepository(AbstractSalesOrderRepository):
             return None
         return o
 
+    async def get_sales_order_for_update(self, order_id: str, business_id: str) -> Optional[SalesOrderInDB]:
+        return await self.get_order_by_id(order_id, business_id)
+
     async def get_order_by_number(self, business_id: str, order_number: str) -> Optional[SalesOrderInDB]:
         for o in self._orders.values():
             if o.business_id == business_id and o.sales_order_number == order_number and not o.is_deleted:
@@ -408,6 +419,8 @@ class InMemorySalesOrderRepository(AbstractSalesOrderRepository):
         tax_amount: Decimal,
         line_subtotal: Decimal,
         line_total: Decimal,
+        discount_rule_id: Optional[str] = None,
+        discount_rule_name_snapshot: Optional[str] = None,
     ) -> SalesOrderLineInDB:
         lid = str(uuid.uuid4())
         now = datetime.now(timezone.utc)
@@ -422,6 +435,8 @@ class InMemorySalesOrderRepository(AbstractSalesOrderRepository):
             quantity_remaining=quantity_ordered,
             unit_price=unit_price,
             discount_amount=discount_amount,
+            discount_rule_id=discount_rule_id,
+            discount_rule_name_snapshot=discount_rule_name_snapshot,
             tax_amount=tax_amount,
             line_subtotal=line_subtotal,
             line_total=line_total,
@@ -480,11 +495,23 @@ class AbstractReservationRepository(ABC):
         pass
 
     @abstractmethod
+    async def get_reservation_for_update(self, reservation_id: str) -> Optional[SalesOrderReservationInDB]:
+        pass
+
+    @abstractmethod
     async def list_by_order(self, sales_order_id: str) -> List[SalesOrderReservationInDB]:
         pass
 
     @abstractmethod
+    async def list_by_order_for_update(self, sales_order_id: str) -> List[SalesOrderReservationInDB]:
+        pass
+
+    @abstractmethod
     async def list_active_by_warehouse_product(self, business_id: str, warehouse_id: str, product_id: str, variant_id: Optional[str]) -> List[SalesOrderReservationInDB]:
+        pass
+
+    @abstractmethod
+    async def list_active_reservations_for_update(self, business_id: str, warehouse_id: str, product_id: str, variant_id: Optional[str]) -> List[SalesOrderReservationInDB]:
         pass
 
     @abstractmethod
@@ -538,8 +565,17 @@ class InMemoryReservationRepository(AbstractReservationRepository):
             return None
         return r
 
+    async def get_reservation_for_update(self, reservation_id: str) -> Optional[SalesOrderReservationInDB]:
+        r = self._reservations.get(reservation_id)
+        if not r:
+            return None
+        return r
+
     async def list_by_order(self, sales_order_id: str) -> List[SalesOrderReservationInDB]:
         return [r for r in self._reservations.values() if r.sales_order_id == sales_order_id]
+
+    async def list_by_order_for_update(self, sales_order_id: str) -> List[SalesOrderReservationInDB]:
+        return await self.list_by_order(sales_order_id)
 
     async def list_active_by_warehouse_product(
         self, business_id: str, warehouse_id: str, product_id: str, variant_id: Optional[str]
@@ -555,6 +591,11 @@ class InMemoryReservationRepository(AbstractReservationRepository):
             ):
                 results.append(r)
         return results
+
+    async def list_active_reservations_for_update(
+        self, business_id: str, warehouse_id: str, product_id: str, variant_id: Optional[str]
+    ) -> List[SalesOrderReservationInDB]:
+        return await self.list_active_by_warehouse_product(business_id, warehouse_id, product_id, variant_id)
 
     async def update_status(self, reservation_id: str, status: ReservationStatus) -> Optional[SalesOrderReservationInDB]:
         r = self._reservations.get(reservation_id)

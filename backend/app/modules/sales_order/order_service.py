@@ -3,6 +3,7 @@ from decimal import Decimal
 from datetime import datetime, timezone
 import uuid
 from fastapi import HTTPException, status
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.sales_order.schemas import (
     SalesOrderInDB,
@@ -65,12 +66,14 @@ class SalesOrderService:
         availability_svc: AvailabilityService = availability_service,
         membership_service: BusinessMembershipService = business_membership_service,
         inventory_srv: InventoryService = inventory_service,
+        session: Optional[AsyncSession] = None,
     ):
         self.order_repo = order_repo
         self.reservation_repo = reservation_repo
         self.availability_svc = availability_svc
         self.membership_service = membership_service
         self.inventory_srv = inventory_srv
+        self.session = session
 
     async def _validate_access(
         self,
@@ -173,6 +176,28 @@ class SalesOrderService:
         return SalesOrderResponse(**o.model_dump(), lines=lines)
 
     async def create_order(self, business_id: str, user_id: str, payload: SalesOrderCreate) -> SalesOrderResponse:
+        if self.session is not None:
+            async with self.session.begin():
+                return await self._create_order_with_retry(business_id, user_id, payload)
+        else:
+            return await self._create_order_with_retry(business_id, user_id, payload)
+
+    async def _create_order_with_retry(self, business_id: str, user_id: str, payload: SalesOrderCreate) -> SalesOrderResponse:
+        for attempt in range(3):
+            try:
+                if self.session is not None:
+                    async with self.session.begin_nested():
+                        return await self._create_order_impl(business_id, user_id, payload)
+                else:
+                    return await self._create_order_impl(business_id, user_id, payload)
+            except Exception as e:
+                err_str = str(e).lower()
+                if ("unique" in err_str and ("sales_order_number" in err_str or "uq_sales_order" in err_str)) and attempt < 2:
+                    continue
+                raise
+        raise HTTPException(status_code=409, detail="Document number collision; please retry")
+
+    async def _create_order_impl(self, business_id: str, user_id: str, payload: SalesOrderCreate) -> SalesOrderResponse:
         await self._validate_access(business_id, user_id, required_roles=(BusinessMembershipRole.OWNER, BusinessMembershipRole.ADMIN))
         await self._validate_customer(business_id, payload.customer_id)
         await self._validate_branch(business_id, payload.branch_id)
@@ -315,6 +340,13 @@ class SalesOrderService:
         return {"message": "Sales Order line successfully deleted."}
 
     async def confirm_order(self, business_id: str, order_id: str, user_id: str) -> SalesOrderResponse:
+        if self.session is not None:
+            async with self.session.begin():
+                return await self._confirm_order_impl(business_id, order_id, user_id)
+        else:
+            return await self._confirm_order_impl(business_id, order_id, user_id)
+
+    async def _confirm_order_impl(self, business_id: str, order_id: str, user_id: str) -> SalesOrderResponse:
         await self._validate_access(business_id, user_id, required_roles=(BusinessMembershipRole.OWNER, BusinessMembershipRole.ADMIN))
         o = await self.order_repo.get_order_by_id(order_id, business_id)
         if not o:
@@ -330,6 +362,10 @@ class SalesOrderService:
 
         _inventory_lock.acquire()
         try:
+            # Lock order row for status transition
+            order = await self.order_repo.get_sales_order_for_update(order_id, business_id)
+            if not order:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Sales Order not found.")
             conflicts: List[InventoryReservationConflict] = []
             for l in lines:
                 product = await product_repository.get_by_id(l.product_id, business_id)
@@ -368,8 +404,15 @@ class SalesOrderService:
         return await self._build_response(business_id, updated)
 
     async def cancel_order(self, business_id: str, order_id: str, user_id: str) -> SalesOrderResponse:
+        if self.session is not None:
+            async with self.session.begin():
+                return await self._cancel_order_impl(business_id, order_id, user_id)
+        else:
+            return await self._cancel_order_impl(business_id, order_id, user_id)
+
+    async def _cancel_order_impl(self, business_id: str, order_id: str, user_id: str) -> SalesOrderResponse:
         await self._validate_access(business_id, user_id, required_roles=(BusinessMembershipRole.OWNER, BusinessMembershipRole.ADMIN))
-        o = await self.order_repo.get_order_by_id(order_id, business_id)
+        o = await self.order_repo.get_sales_order_for_update(order_id, business_id)
         if not o:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Sales Order not found.")
         if self._is_terminal(o.status):
@@ -391,6 +434,13 @@ class SalesOrderService:
         return await self._build_response(business_id, updated)
 
     async def fulfill_order(self, business_id: str, order_id: str, user_id: str, payload: SalesOrderFulfill) -> SalesOrderResponse:
+        if self.session is not None:
+            async with self.session.begin():
+                return await self._fulfill_order_impl(business_id, order_id, user_id, payload)
+        else:
+            return await self._fulfill_order_impl(business_id, order_id, user_id, payload)
+
+    async def _fulfill_order_impl(self, business_id: str, order_id: str, user_id: str, payload: SalesOrderFulfill) -> SalesOrderResponse:
         await self._validate_access(business_id, user_id, required_roles=(BusinessMembershipRole.OWNER, BusinessMembershipRole.ADMIN))
         
         _inventory_lock.acquire()

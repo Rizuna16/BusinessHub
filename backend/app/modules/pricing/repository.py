@@ -1,4 +1,5 @@
 import uuid
+import asyncio
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -417,5 +418,104 @@ class InMemoryPriceEntryRepository(AbstractPriceEntryRepository):
         cls._price_entries.clear()
 
 
+class AbstractDiscountRuleRepository(ABC):
+    @abstractmethod
+    async def create(self, business_id: str, data: dict) -> "DiscountRuleInDB": ...
+
+    @abstractmethod
+    async def get_by_id(self, rule_id: str, business_id: str) -> Optional["DiscountRuleInDB"]: ...
+
+    @abstractmethod
+    async def list_by_business(self, business_id: str, include_archived: bool = False) -> List["DiscountRuleInDB"]: ...
+
+    @abstractmethod
+    async def update(self, rule_id: str, business_id: str, updates: dict) -> Optional["DiscountRuleInDB"]: ...
+
+    @abstractmethod
+    async def update_status(self, rule_id: str, business_id: str, status: str) -> Optional["DiscountRuleInDB"]: ...
+
+    @abstractmethod
+    async def delete(self, rule_id: str, business_id: str) -> bool: ...
+
+    @classmethod
+    @abstractmethod
+    def clear(cls): ...
+
+
+class InMemoryDiscountRuleRepository(AbstractDiscountRuleRepository):
+    _rules: Dict[str, "DiscountRuleInDB"] = {}
+    _lock = asyncio.Lock()
+
+    async def create(self, business_id: str, data: dict) -> "DiscountRuleInDB":
+        from app.modules.pricing.schemas import DiscountRuleInDB
+        async with self._lock:
+            now = datetime.now(timezone.utc)
+            rule = DiscountRuleInDB(
+                id=str(uuid.uuid4()),
+                business_id=business_id,
+                name=data["name"],
+                description=data.get("description"),
+                type=data["type"],
+                value=data["value"],
+                currency=data.get("currency", "IDR"),
+                product_id=data.get("product_id"),
+                variant_id=data.get("variant_id"),
+                starts_at=data["starts_at"],
+                ends_at=data.get("ends_at"),
+                priority=data.get("priority", 100),
+                status="ACTIVE",
+                created_at=now,
+                updated_at=now,
+            )
+            self._rules[rule.id] = rule
+            return rule
+
+    async def get_by_id(self, rule_id: str, business_id: str) -> Optional["DiscountRuleInDB"]:
+        rule = self._rules.get(rule_id)
+        if rule and rule.business_id == business_id:
+            return rule
+        return None
+
+    async def list_by_business(self, business_id: str, include_archived: bool = False) -> List["DiscountRuleInDB"]:
+        results = []
+        for r in self._rules.values():
+            if r.business_id == business_id:
+                if include_archived or r.status != "ARCHIVED":
+                    results.append(r)
+        results.sort(key=lambda r: (r.priority, r.id))
+        return results
+
+    async def update(self, rule_id: str, business_id: str, updates: dict) -> Optional["DiscountRuleInDB"]:
+        from app.modules.pricing.schemas import DiscountRuleInDB
+        async with self._lock:
+            rule = self._rules.get(rule_id)
+            if not rule or rule.business_id != business_id:
+                return None
+            current = rule.model_dump()
+            for k, v in updates.items():
+                if v is not None:
+                    current[k] = v
+            current["updated_at"] = datetime.now(timezone.utc)
+            updated = DiscountRuleInDB(**current)
+            self._rules[rule_id] = updated
+            return updated
+
+    async def update_status(self, rule_id: str, business_id: str, status: str) -> Optional["DiscountRuleInDB"]:
+        return await self.update(rule_id, business_id, {"status": status})
+
+    async def delete(self, rule_id: str, business_id: str) -> bool:
+        async with self._lock:
+            rule = self._rules.get(rule_id)
+            if rule and rule.business_id == business_id:
+                del self._rules[rule_id]
+                return True
+            return False
+
+    @classmethod
+    def clear(cls):
+        cls._rules.clear()
+
+
 price_list_repository = InMemoryPriceListRepository()
 price_entry_repository = InMemoryPriceEntryRepository()
+discount_rule_repository = InMemoryDiscountRuleRepository()

@@ -2,7 +2,7 @@ from enum import Enum
 from typing import Optional, List
 from decimal import Decimal
 from datetime import datetime, timezone
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, ConfigDict
 
 class PriceListStatus(str, Enum):
     ACTIVE = "ACTIVE"
@@ -165,4 +165,106 @@ class PriceEntryResponse(BaseModel):
 
 class PriceEntryListResponse(BaseModel):
     items: List[PriceEntryResponse]
+    total: int
+
+
+class DiscountRuleType(str, Enum):
+    PERCENTAGE = "PERCENTAGE"
+    FIXED = "FIXED"
+
+
+class DiscountRuleStatus(str, Enum):
+    ACTIVE = "ACTIVE"
+    INACTIVE = "INACTIVE"
+    ARCHIVED = "ARCHIVED"
+
+
+class DiscountRuleCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+    description: Optional[str] = Field(None, max_length=1000)
+    type: DiscountRuleType
+    value: Decimal
+    currency: str = Field(default="IDR", max_length=10)
+    product_id: Optional[str] = None
+    variant_id: Optional[str] = None
+    starts_at: datetime
+    ends_at: Optional[datetime] = None
+    priority: int = Field(default=100, ge=0, le=9999)
+
+    @field_validator("value")
+    @classmethod
+    def validate_value(cls, v: Decimal, info) -> Decimal:
+        rule_type = info.data.get("type")
+        if rule_type == DiscountRuleType.PERCENTAGE:
+            if v < Decimal("0") or v > Decimal("100"):
+                raise ValueError("Percentage must be between 0.00 and 100.00")
+        elif rule_type == DiscountRuleType.FIXED:
+            if v < Decimal("0"):
+                raise ValueError("Fixed discount must be >= 0")
+        return v
+
+    def model_post_init(self, __context) -> None:
+        if self.product_id is None and self.variant_id is None:
+            raise ValueError("Either product_id or variant_id must be provided.")
+        if self.product_id is not None and self.variant_id is not None:
+            raise ValueError("Only one of product_id or variant_id may be provided, not both.")
+        if self.ends_at is not None and self.ends_at <= self.starts_at:
+            raise ValueError("ends_at must be after starts_at.")
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class DiscountRuleUpdate(BaseModel):
+    name: Optional[str] = Field(None, min_length=1, max_length=255)
+    description: Optional[str] = Field(None, max_length=1000)
+    value: Optional[Decimal] = None
+    starts_at: Optional[datetime] = None
+    ends_at: Optional[datetime] = None
+    priority: Optional[int] = Field(None, ge=0, le=9999)
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class DiscountRuleInDB(BaseModel):
+    id: str
+    business_id: str
+    name: str
+    description: Optional[str] = None
+    type: str
+    value: Decimal
+    currency: str = "IDR"
+    product_id: Optional[str] = None
+    variant_id: Optional[str] = None
+    starts_at: datetime
+    ends_at: Optional[datetime] = None
+    priority: int
+    status: str
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class DiscountRuleResponse(BaseModel):
+    id: str
+    business_id: str
+    name: str
+    description: Optional[str] = None
+    type: str
+    value: Decimal
+    currency: str = "IDR"
+    product_id: Optional[str] = None
+    variant_id: Optional[str] = None
+    starts_at: datetime
+    ends_at: Optional[datetime] = None
+    priority: int
+    status: str
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class DiscountRuleListResponse(BaseModel):
+    items: List[DiscountRuleResponse]
     total: int

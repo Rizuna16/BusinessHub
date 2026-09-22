@@ -2,6 +2,7 @@ from typing import Optional
 from decimal import Decimal
 from datetime import datetime, timezone
 from fastapi import HTTPException, status
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.sales_payment.schemas import (
     SalesPaymentInDB,
@@ -33,10 +34,12 @@ class SalesPaymentService:
         payment_repo: AbstractSalesPaymentRepository = sales_payment_repository,
         sales_repo: AbstractSalesRepository = sales_repository,
         membership_service: BusinessMembershipService = business_membership_service,
+        session: Optional[AsyncSession] = None,
     ):
         self.payment_repo = payment_repo
         self.sales_repo = sales_repo
         self.membership_service = membership_service
+        self.session = session
 
     async def _validate_access(
         self,
@@ -62,6 +65,40 @@ class SalesPaymentService:
         return sales
 
     async def create_payment(
+        self,
+        business_id: str,
+        sales_id: str,
+        user_id: str,
+        payload: SalesPaymentCreate,
+    ) -> SalesPaymentResponse:
+        if self.session is not None:
+            async with self.session.begin():
+                return await self._create_payment_with_retry(business_id, sales_id, user_id, payload)
+        else:
+            return await self._create_payment_with_retry(business_id, sales_id, user_id, payload)
+
+    async def _create_payment_with_retry(
+        self,
+        business_id: str,
+        sales_id: str,
+        user_id: str,
+        payload: SalesPaymentCreate,
+    ) -> SalesPaymentResponse:
+        for attempt in range(3):
+            try:
+                if self.session is not None:
+                    async with self.session.begin_nested():
+                        return await self._create_payment_impl(business_id, sales_id, user_id, payload)
+                else:
+                    return await self._create_payment_impl(business_id, sales_id, user_id, payload)
+            except Exception as e:
+                err_str = str(e).lower()
+                if ("unique" in err_str and ("payment_number" in err_str or "uq_payment" in err_str)) and attempt < 2:
+                    continue
+                raise
+        raise HTTPException(status_code=409, detail="Document number collision; please retry")
+
+    async def _create_payment_impl(
         self,
         business_id: str,
         sales_id: str,
@@ -183,6 +220,19 @@ class SalesPaymentService:
         return SalesPaymentResponse(**payment.model_dump())
 
     async def cancel_payment(
+        self,
+        business_id: str,
+        sales_id: str,
+        payment_id: str,
+        user_id: str,
+    ) -> SalesPaymentResponse:
+        if self.session is not None:
+            async with self.session.begin():
+                return await self._cancel_payment_impl(business_id, sales_id, payment_id, user_id)
+        else:
+            return await self._cancel_payment_impl(business_id, sales_id, payment_id, user_id)
+
+    async def _cancel_payment_impl(
         self,
         business_id: str,
         sales_id: str,

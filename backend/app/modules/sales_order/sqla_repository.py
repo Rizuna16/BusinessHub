@@ -282,6 +282,7 @@ class SQLAlchemyQuotationRepository(AbstractQuotationRepository):
         self, quotation_id: str, product_id: str, variant_id: Optional[str], description: Optional[str],
         quantity: Decimal, unit_price: Decimal, discount_amount: Decimal, tax_amount: Decimal,
         line_subtotal: Decimal, line_total: Decimal,
+        discount_rule_id: Optional[str] = None, discount_rule_name_snapshot: Optional[str] = None,
     ) -> QuotationLineInDB:
         data = {
             "id": str(uuid.uuid4()),
@@ -292,6 +293,8 @@ class SQLAlchemyQuotationRepository(AbstractQuotationRepository):
             "quantity": quantity,
             "unit_price": unit_price,
             "discount_amount": discount_amount,
+            "discount_rule_id": discount_rule_id,
+            "discount_rule_name_snapshot": discount_rule_name_snapshot,
             "tax_amount": tax_amount,
             "line_subtotal": line_subtotal,
             "line_total": line_total,
@@ -396,6 +399,16 @@ class SQLAlchemySalesOrderRepository(AbstractSalesOrderRepository):
         obj = result.scalar_one_or_none()
         return _to_sales_order_in_db(obj) if obj else None
 
+    async def get_sales_order_for_update(self, order_id: str, business_id: str) -> Optional[SalesOrderInDB]:
+        stmt = select(SalesOrderModel).where(
+            SalesOrderModel.id == order_id,
+            SalesOrderModel.business_id == business_id,
+            SalesOrderModel.is_deleted == False,
+        ).with_for_update()
+        result = await self.session.execute(stmt)
+        obj = result.scalar_one_or_none()
+        return _to_sales_order_in_db(obj) if obj else None
+
     async def get_order_by_number(self, business_id: str, order_number: str) -> Optional[SalesOrderInDB]:
         stmt = select(SalesOrderModel).where(
             SalesOrderModel.business_id == business_id,
@@ -480,6 +493,7 @@ class SQLAlchemySalesOrderRepository(AbstractSalesOrderRepository):
         self, sales_order_id: str, product_id: str, variant_id: Optional[str], description: Optional[str],
         quantity_ordered: Decimal, unit_price: Decimal, discount_amount: Decimal, tax_amount: Decimal,
         line_subtotal: Decimal, line_total: Decimal,
+        discount_rule_id: Optional[str] = None, discount_rule_name_snapshot: Optional[str] = None,
     ) -> SalesOrderLineInDB:
         data = {
             "id": str(uuid.uuid4()),
@@ -492,6 +506,8 @@ class SQLAlchemySalesOrderRepository(AbstractSalesOrderRepository):
             "quantity_remaining": quantity_ordered,
             "unit_price": unit_price,
             "discount_amount": discount_amount,
+            "discount_rule_id": discount_rule_id,
+            "discount_rule_name_snapshot": discount_rule_name_snapshot,
             "tax_amount": tax_amount,
             "line_subtotal": line_subtotal,
             "line_total": line_total,
@@ -588,12 +604,29 @@ class SQLAlchemyReservationRepository(AbstractReservationRepository):
         obj = result.scalar_one_or_none()
         return _to_reservation_in_db(obj) if obj else None
 
+    async def get_reservation_for_update(self, reservation_id: str) -> Optional[SalesOrderReservationInDB]:
+        stmt = select(ReservationModel).where(
+            ReservationModel.id == reservation_id,
+        ).with_for_update()
+        result = await self.session.execute(stmt)
+        obj = result.scalar_one_or_none()
+        return _to_reservation_in_db(obj) if obj else None
+
     async def list_by_order(self, sales_order_id: str) -> List[SalesOrderReservationInDB]:
         stmt = (
             select(ReservationModel)
             .where(ReservationModel.sales_order_id == sales_order_id)
             .order_by(ReservationModel.created_at, ReservationModel.id)
         )
+        result = await self.session.execute(stmt)
+        return [_to_reservation_in_db(o) for o in result.scalars().all()]
+
+    async def list_by_order_for_update(self, sales_order_id: str) -> List[SalesOrderReservationInDB]:
+        stmt = (
+            select(ReservationModel)
+            .where(ReservationModel.sales_order_id == sales_order_id)
+            .order_by(ReservationModel.created_at, ReservationModel.id)
+        ).with_for_update()
         result = await self.session.execute(stmt)
         return [_to_reservation_in_db(o) for o in result.scalars().all()]
 
@@ -608,6 +641,23 @@ class SQLAlchemyReservationRepository(AbstractReservationRepository):
             ReservationModel.status == ReservationStatus.ACTIVE.value,
         ]
         stmt = select(ReservationModel).where(and_(*filters))
+        result = await self.session.execute(stmt)
+        return [_to_reservation_in_db(o) for o in result.scalars().all()]
+
+    async def list_active_reservations_for_update(
+        self, business_id: str, warehouse_id: str, product_id: str, variant_id: Optional[str]
+    ) -> List[SalesOrderReservationInDB]:
+        filters = [
+            ReservationModel.business_id == business_id,
+            ReservationModel.warehouse_id == warehouse_id,
+            ReservationModel.product_id == product_id,
+            ReservationModel.status == ReservationStatus.ACTIVE.value,
+        ]
+        if variant_id is not None:
+            filters.append(ReservationModel.variant_id == variant_id)
+        else:
+            filters.append(ReservationModel.variant_id == None)
+        stmt = select(ReservationModel).where(and_(*filters)).with_for_update()
         result = await self.session.execute(stmt)
         return [_to_reservation_in_db(o) for o in result.scalars().all()]
 
