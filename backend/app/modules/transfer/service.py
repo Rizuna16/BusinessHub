@@ -2,6 +2,7 @@ from typing import Any, Dict, List, Optional
 from decimal import Decimal
 from datetime import datetime, timezone
 from fastapi import HTTPException, status
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.transfer.schemas import (
     TransferInDB,
@@ -39,6 +40,7 @@ from app.modules.inventory.repository import (
 from app.modules.warehouse.repository import inventory_location_repository, warehouse_repository
 from app.modules.warehouse.schemas import InventoryLocationStatus, WarehouseStatus
 from app.modules.sales_order.availability import _inventory_lock
+from app.modules.inventory_batch.service import inventory_batch_service
 
 
 class TransferService:
@@ -46,9 +48,11 @@ class TransferService:
         self,
         transfer_repo: AbstractTransferRepository = transfer_repository,
         membership_service: BusinessMembershipService = business_membership_service,
+        session: Optional[AsyncSession] = None,
     ):
         self.transfer_repo = transfer_repo
         self.membership_service = membership_service
+        self.session = session
 
     # ----------------------------------------------------------------
     # ATOMICITY — Snapshot / Restore (Feature #60)
@@ -153,6 +157,29 @@ class TransferService:
     # ----------------------------------------------------------------
 
     async def create_transfer(
+        self, business_id: str, user_id: str, payload: TransferCreate
+    ) -> TransferResponse:
+        if self.session is not None:
+            async with self.session.begin():
+                return await self._create_transfer_with_retry(business_id, user_id, payload)
+        return await self._create_transfer_with_retry(business_id, user_id, payload)
+
+    async def _create_transfer_with_retry(self, business_id: str, user_id: str, payload: TransferCreate) -> TransferResponse:
+        for attempt in range(3):
+            try:
+                if self.session is not None:
+                    async with self.session.begin_nested():
+                        return await self._create_transfer_impl(business_id, user_id, payload)
+                else:
+                    return await self._create_transfer_impl(business_id, user_id, payload)
+            except Exception as e:
+                err_str = str(e).lower()
+                if ("unique" in err_str and ("transfer_number" in err_str or "uq_transfer" in err_str)) and attempt < 2:
+                    continue
+                raise
+        raise HTTPException(status_code=409, detail="Document number collision; please retry")
+
+    async def _create_transfer_impl(
         self, business_id: str, user_id: str, payload: TransferCreate
     ) -> TransferResponse:
         await self._validate_access(
@@ -364,6 +391,15 @@ class TransferService:
     async def dispatch_transfer(
         self, business_id: str, transfer_id: str, user_id: str
     ) -> TransferResponse:
+        if self.session is not None:
+            async with self.session.begin():
+                return await self._dispatch_transfer_impl(business_id, transfer_id, user_id)
+        else:
+            return await self._dispatch_transfer_impl(business_id, transfer_id, user_id)
+
+    async def _dispatch_transfer_impl(
+        self, business_id: str, transfer_id: str, user_id: str
+    ) -> TransferResponse:
         await self._validate_access(
             business_id, user_id,
             required_roles=(BusinessMembershipRole.OWNER, BusinessMembershipRole.ADMIN),
@@ -465,6 +501,22 @@ class TransferService:
                         direction=MovementDirection.OUT,
                     )
 
+                # Batch outbound on dispatch for each line
+                for line in lines:
+                    await inventory_batch_service.record_batch_outbound(
+                        business_id=business_id,
+                        inventory_location_id=t.source_location_id,
+                        product_id=line.product_id,
+                        variant_id=line.variant_id,
+                        batch_id=f"TRF:{transfer_id}:{line.id}:SRC",
+                        quantity=line.quantity,
+                        stock_movement_id=f"TRF:{transfer_id}:{line.id}:DISPATCH",
+                    )
+                for line in lines:
+                    await inventory_batch_service.validate_batch_aggregate_invariant(
+                        business_id, t.source_location_id, line.product_id, line.variant_id,
+                    )
+
                 # Update transfer status
                 updated = await self.transfer_repo.update_transfer(
                     transfer_id=transfer_id,
@@ -485,6 +537,15 @@ class TransferService:
         return TransferResponse(**updated.model_dump(), lines=line_resp)
 
     async def receive_transfer(
+        self, business_id: str, transfer_id: str, user_id: str
+    ) -> TransferResponse:
+        if self.session is not None:
+            async with self.session.begin():
+                return await self._receive_transfer_impl(business_id, transfer_id, user_id)
+        else:
+            return await self._receive_transfer_impl(business_id, transfer_id, user_id)
+
+    async def _receive_transfer_impl(
         self, business_id: str, transfer_id: str, user_id: str
     ) -> TransferResponse:
         await self._validate_access(
@@ -555,6 +616,24 @@ class TransferService:
                         direction=MovementDirection.IN,
                     )
 
+                # Batch inbound on receive for each line
+                for line in lines:
+                    await inventory_batch_service.record_batch_inbound(
+                        business_id=business_id,
+                        inventory_location_id=t.destination_location_id,
+                        product_id=line.product_id,
+                        variant_id=line.variant_id,
+                        batch_number=f"TRF:{transfer_id}:{line.id}:DST",
+                        quantity=line.quantity,
+                        manufacture_date=None,
+                        expiry_date=None,
+                        stock_movement_id=f"TRF:{transfer_id}:{line.id}:RECEIVE",
+                    )
+                for line in lines:
+                    await inventory_batch_service.validate_batch_aggregate_invariant(
+                        business_id, t.destination_location_id, line.product_id, line.variant_id,
+                    )
+
                 # Update transfer status
                 updated = await self.transfer_repo.update_transfer(
                     transfer_id=transfer_id,
@@ -563,6 +642,45 @@ class TransferService:
                     received_by_user_id=user_id,
                     received_at=now,
                 )
+                # ── NOTIFICATION (post-commit, failure-isolated) ──
+                try:
+                    from app.modules.notification.service import _send_notification
+                    from app.modules.notification.schemas import (
+                        NotificationScope, NotificationType, NotificationSeverity,
+                    )
+                    from app.modules.business_membership.repository import (
+                        business_membership_repository,
+                    )
+                    from app.modules.business_membership.schemas import (
+                        BusinessMembershipRole, BusinessMembershipStatus,
+                    )
+
+                    owner_admin_ids = [
+                        m.user_id
+                        for m in business_membership_repository._memberships.values()
+                        if m.business_id == business_id
+                        and m.status == BusinessMembershipStatus.ACTIVE
+                        and m.role in (BusinessMembershipRole.OWNER, BusinessMembershipRole.ADMIN)
+                    ]
+                    for member_id in owner_admin_ids:
+                        await _send_notification(
+                            recipient_id=member_id,
+                            scope=NotificationScope.TENANT,
+                            notif_type=NotificationType.TRANSFER_COMPLETED,
+                            severity=NotificationSeverity.INFO,
+                            title="Transfer Completed",
+                            message=f"Transfer {t.transfer_number} from {t.source_location_id} to {t.destination_location_id} has been received.",
+                            business_id=business_id,
+                            metadata={
+                                "transfer_id": transfer_id,
+                                "transfer_number": t.transfer_number,
+                                "source_branch_id": t.source_location_id,
+                                "destination_branch_id": t.destination_location_id,
+                            },
+                            deduplication_key=f"TRANSFER_COMPLETED:{transfer_id}:{member_id}",
+                        )
+                except Exception:
+                    pass
             except Exception:
                 self._restore_all_repos(snapshots)
                 raise
@@ -575,6 +693,15 @@ class TransferService:
         return TransferResponse(**updated.model_dump(), lines=line_resp)
 
     async def cancel_transfer(
+        self, business_id: str, transfer_id: str, user_id: str
+    ) -> TransferResponse:
+        if self.session is not None:
+            async with self.session.begin():
+                return await self._cancel_transfer_impl(business_id, transfer_id, user_id)
+        else:
+            return await self._cancel_transfer_impl(business_id, transfer_id, user_id)
+
+    async def _cancel_transfer_impl(
         self, business_id: str, transfer_id: str, user_id: str
     ) -> TransferResponse:
         await self._validate_access(
@@ -634,6 +761,24 @@ class TransferService:
                             movement_type=InventoryCostMovementType.TRANSFER_IN,
                             reference_type="TRANSFER_ORDER_CANCEL",
                             reference_id=transfer_id,
+                        )
+
+                    # Batch restoration on cancel from DISPATCHED
+                    for line in lines:
+                        await inventory_batch_service.record_batch_inbound(
+                            business_id=business_id,
+                            inventory_location_id=t.source_location_id,
+                            product_id=line.product_id,
+                            variant_id=line.variant_id,
+                            batch_number=f"TRF:{transfer_id}:{line.id}:SRC_CANCEL",
+                            quantity=line.quantity,
+                            manufacture_date=None,
+                            expiry_date=None,
+                            stock_movement_id=f"TRF:{transfer_id}:{line.id}:CANCEL",
+                        )
+                    for line in lines:
+                        await inventory_batch_service.validate_batch_aggregate_invariant(
+                            business_id, t.source_location_id, line.product_id, line.variant_id,
                         )
 
                     # Create reversal stock movement for audit

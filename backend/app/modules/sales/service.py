@@ -3,6 +3,7 @@ from decimal import Decimal
 from datetime import datetime, timezone
 import uuid
 from fastapi import HTTPException, status
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.sales.schemas import (
     SalesInDB,
@@ -60,12 +61,14 @@ class SalesService:
         price_list_repo: AbstractPriceListRepository = price_list_repository,
         price_entry_repo: AbstractPriceEntryRepository = price_entry_repository,
         inventory_srv: InventoryService = inventory_service,
+        session: Optional[AsyncSession] = None,
     ):
         self.sales_repo = sales_repo
         self.membership_service = membership_service
         self.price_list_repo = price_list_repo
         self.price_entry_repo = price_entry_repo
         self.inventory_srv = inventory_srv
+        self.session = session
 
     async def _validate_access(
         self,
@@ -258,6 +261,28 @@ class SalesService:
         return None
 
     async def create_sales(self, business_id: str, user_id: str, payload: SalesCreate) -> SalesResponse:
+        if self.session is not None:
+            async with self.session.begin():
+                return await self._create_sales_with_retry(business_id, user_id, payload)
+        else:
+            return await self._create_sales_with_retry(business_id, user_id, payload)
+
+    async def _create_sales_with_retry(self, business_id: str, user_id: str, payload: SalesCreate) -> SalesResponse:
+        for attempt in range(3):
+            try:
+                if self.session is not None:
+                    async with self.session.begin_nested():
+                        return await self._create_sales_impl(business_id, user_id, payload)
+                else:
+                    return await self._create_sales_impl(business_id, user_id, payload)
+            except Exception as e:
+                err_str = str(e).lower()
+                if ("unique" in err_str and ("sales_number" in err_str or "uq_sales" in err_str)) and attempt < 2:
+                    continue
+                raise
+        raise HTTPException(status_code=409, detail="Document number collision; please retry")
+
+    async def _create_sales_impl(self, business_id: str, user_id: str, payload: SalesCreate) -> SalesResponse:
         await self._validate_access(
             business_id, user_id, required_roles=(BusinessMembershipRole.OWNER, BusinessMembershipRole.ADMIN)
         )
@@ -334,6 +359,19 @@ class SalesService:
         user_id: str,
         payload: SalesUpdate,
     ) -> SalesResponse:
+        if self.session is not None:
+            async with self.session.begin():
+                return await self._update_sales_impl(business_id, sales_id, user_id, payload)
+        else:
+            return await self._update_sales_impl(business_id, sales_id, user_id, payload)
+
+    async def _update_sales_impl(
+        self,
+        business_id: str,
+        sales_id: str,
+        user_id: str,
+        payload: SalesUpdate,
+    ) -> SalesResponse:
         await self._validate_access(
             business_id, user_id, required_roles=(BusinessMembershipRole.OWNER, BusinessMembershipRole.ADMIN)
         )
@@ -367,6 +405,13 @@ class SalesService:
         return await self._build_sales_response(business_id, updated)
 
     async def delete_sales_draft(self, business_id: str, sales_id: str, user_id: str) -> dict:
+        if self.session is not None:
+            async with self.session.begin():
+                return await self._delete_sales_draft_impl(business_id, sales_id, user_id)
+        else:
+            return await self._delete_sales_draft_impl(business_id, sales_id, user_id)
+
+    async def _delete_sales_draft_impl(self, business_id: str, sales_id: str, user_id: str) -> dict:
         await self._validate_access(
             business_id, user_id, required_roles=(BusinessMembershipRole.OWNER, BusinessMembershipRole.ADMIN)
         )
@@ -398,6 +443,19 @@ class SalesService:
         user_id: str,
         payload: SalesLineCreate,
     ) -> SalesLineResponse:
+        if self.session is not None:
+            async with self.session.begin():
+                return await self._add_line_impl(business_id, sales_id, user_id, payload)
+        else:
+            return await self._add_line_impl(business_id, sales_id, user_id, payload)
+
+    async def _add_line_impl(
+        self,
+        business_id: str,
+        sales_id: str,
+        user_id: str,
+        payload: SalesLineCreate,
+    ) -> SalesLineResponse:
         await self._validate_access(
             business_id, user_id, required_roles=(BusinessMembershipRole.OWNER, BusinessMembershipRole.ADMIN)
         )
@@ -417,6 +475,32 @@ class SalesService:
         resolved_product_id, resolved_variant_id = await self._validate_product_and_variant(
             business_id, payload.product_id, payload.variant_id
         )
+
+        # Feature #64: Server-authoritative discount evaluation
+        from app.modules.pricing.service import PricingService
+        from datetime import datetime, timezone
+        pricing_svc = PricingService()
+        auto_discount, rule_id, rule_name = await pricing_svc.evaluate_discount(
+            business_id=business_id,
+            product_id=resolved_product_id,
+            variant_id=resolved_variant_id,
+            quantity=payload.quantity,
+            unit_price=payload.unit_price,
+            transaction_currency="IDR",  # default; override if multi-currency
+            evaluation_time=datetime.now(timezone.utc),
+        )
+
+        # Determine final discount_amount
+        if auto_discount > Decimal("0"):
+            # Automatic rule applied — server overrides client discount
+            final_discount = auto_discount
+            final_rule_id = rule_id
+            final_rule_name = rule_name
+        else:
+            # No automatic rule — respect manual discount if OWNER/ADMIN
+            final_discount = payload.discount_amount
+            final_rule_id = None
+            final_rule_name = None
 
         # Resolve tax treatment from product and business config
         product = await product_repository.get_by_id(resolved_product_id, business_id)
@@ -440,7 +524,7 @@ class SalesService:
             tax_result = tax_calculation_service.calculate_line_tax(
                 quantity=payload.quantity,
                 unit_price=payload.unit_price,
-                discount_amount=payload.discount_amount,
+                discount_amount=final_discount,
                 tax_treatment=tax_treatment,
                 pricing_mode=pricing_mode,
             )
@@ -449,7 +533,7 @@ class SalesService:
             calculated_tax = payload.tax_amount if payload.tax_amount is not None else Decimal("0.00")
 
         line_subtotal = payload.quantity * payload.unit_price
-        line_total = line_subtotal - payload.discount_amount + calculated_tax
+        line_total = line_subtotal - final_discount + calculated_tax
 
         line = await self.sales_repo.create_line(
             sales_id=sales_id,
@@ -458,7 +542,9 @@ class SalesService:
             description=payload.description,
             quantity=payload.quantity,
             unit_price=payload.unit_price,
-            discount_amount=payload.discount_amount,
+            discount_amount=final_discount,
+            discount_rule_id=final_rule_id,
+            discount_rule_name_snapshot=final_rule_name,
             tax_amount=calculated_tax,
             line_subtotal=line_subtotal,
             line_total=line_total,
@@ -478,6 +564,20 @@ class SalesService:
         )
 
     async def update_line(
+        self,
+        business_id: str,
+        sales_id: str,
+        line_id: str,
+        user_id: str,
+        payload: SalesLineUpdate,
+    ) -> SalesLineResponse:
+        if self.session is not None:
+            async with self.session.begin():
+                return await self._update_line_impl(business_id, sales_id, line_id, user_id, payload)
+        else:
+            return await self._update_line_impl(business_id, sales_id, line_id, user_id, payload)
+
+    async def _update_line_impl(
         self,
         business_id: str,
         sales_id: str,
@@ -523,6 +623,27 @@ class SalesService:
         target_disc = payload.discount_amount if payload.discount_amount is not None else line.discount_amount
         target_tax = payload.tax_amount if payload.tax_amount is not None else line.tax_amount
 
+        # Feature #64: Re-evaluate discount on line update
+        from app.modules.pricing.service import PricingService
+        from datetime import datetime, timezone
+        pricing_svc = PricingService()
+        auto_discount, rule_id, rule_name = await pricing_svc.evaluate_discount(
+            business_id=business_id,
+            product_id=resolved_product_id,
+            variant_id=resolved_variant_id,
+            quantity=target_qty,
+            unit_price=target_price,
+            transaction_currency="IDR",
+            evaluation_time=datetime.now(timezone.utc),
+        )
+        if auto_discount > Decimal("0"):
+            target_disc = auto_discount
+            final_rule_id = rule_id
+            final_rule_name = rule_name
+        else:
+            final_rule_id = None
+            final_rule_name = None
+
         line_subtotal = target_qty * target_price
         if target_disc > line_subtotal:
             raise HTTPException(
@@ -540,10 +661,12 @@ class SalesService:
             description=payload.description,
             quantity=payload.quantity,
             unit_price=payload.unit_price,
-            discount_amount=payload.discount_amount,
+            discount_amount=target_disc,
             tax_amount=payload.tax_amount,
             line_subtotal=line_subtotal,
             line_total=line_total,
+            discount_rule_id=final_rule_id,
+            discount_rule_name_snapshot=final_rule_name,
         )
 
         await self._recalculate_totals(business_id, sales_id)
@@ -559,6 +682,13 @@ class SalesService:
         )
 
     async def delete_line(self, business_id: str, sales_id: str, line_id: str, user_id: str) -> dict:
+        if self.session is not None:
+            async with self.session.begin():
+                return await self._delete_line_impl(business_id, sales_id, line_id, user_id)
+        else:
+            return await self._delete_line_impl(business_id, sales_id, line_id, user_id)
+
+    async def _delete_line_impl(self, business_id: str, sales_id: str, line_id: str, user_id: str) -> dict:
         await self._validate_access(
             business_id, user_id, required_roles=(BusinessMembershipRole.OWNER, BusinessMembershipRole.ADMIN)
         )
@@ -586,6 +716,40 @@ class SalesService:
         return {"message": "Sales line successfully deleted."}
 
     async def finalize_sales(
+        self,
+        business_id: str,
+        sales_id: str,
+        user_id: str,
+        payload: Optional[SalesFinalize] = None,
+    ) -> SalesResponse:
+        if self.session is not None:
+            async with self.session.begin():
+                return await self._finalize_sales_with_retry(business_id, sales_id, user_id, payload)
+        else:
+            return await self._finalize_sales_with_retry(business_id, sales_id, user_id, payload)
+
+    async def _finalize_sales_with_retry(
+        self,
+        business_id: str,
+        sales_id: str,
+        user_id: str,
+        payload: Optional[SalesFinalize] = None,
+    ) -> SalesResponse:
+        for attempt in range(3):
+            try:
+                if self.session is not None:
+                    async with self.session.begin_nested():
+                        return await self._finalize_sales_impl(business_id, sales_id, user_id, payload)
+                else:
+                    return await self._finalize_sales_impl(business_id, sales_id, user_id, payload)
+            except Exception as e:
+                err_str = str(e).lower()
+                if ("unique" in err_str and ("sales_number" in err_str or "uq_sales" in err_str)) and attempt < 2:
+                    continue
+                raise
+        raise HTTPException(status_code=409, detail="Document number collision; please retry")
+
+    async def _finalize_sales_impl(
         self,
         business_id: str,
         sales_id: str,
@@ -773,6 +937,8 @@ class SalesService:
                 )
 
         now = datetime.now(timezone.utc)
+        # Lock sales row for status transition
+        sales_obj = await self.sales_repo.get_sales_for_update(sales_id, business_id)
         updated = await self.sales_repo.update_sales(
             sales_id=sales_id,
             business_id=business_id,
@@ -782,13 +948,59 @@ class SalesService:
         )
         # ── ATOMIC BOUNDARY END ──
 
+        # ── NOTIFICATION (post-commit, failure-isolated) ──
+        try:
+            from app.modules.notification.service import _send_notification
+            from app.modules.notification.schemas import (
+                NotificationScope, NotificationType, NotificationSeverity,
+            )
+            from app.modules.business_membership.repository import (
+                business_membership_repository,
+            )
+            from app.modules.business_membership.schemas import (
+                BusinessMembershipRole, BusinessMembershipStatus,
+            )
+
+            owner_admin_ids = [
+                m.user_id
+                for m in business_membership_repository._memberships.values()
+                if m.business_id == business_id
+                and m.status == BusinessMembershipStatus.ACTIVE
+                and m.role in (BusinessMembershipRole.OWNER, BusinessMembershipRole.ADMIN)
+            ]
+            for member_id in owner_admin_ids:
+                        await _send_notification(
+                            recipient_id=member_id,
+                            scope=NotificationScope.TENANT,
+                            notif_type=NotificationType.SALES_FINALIZED,
+                            severity=NotificationSeverity.INFO,
+                    title="Sales Finalized",
+                    message=f"Sales {updated.sales_number} has been finalized.",
+                    business_id=business_id,
+                    metadata={
+                        "sale_id": sales_id,
+                        "sale_number": updated.sales_number,
+                        "branch_id": updated.branch_id if updated else None,
+                    },
+                    deduplication_key=f"SALES_FINALIZED:{sales_id}:{member_id}",
+                )
+        except Exception:
+            pass
+
         return await self._build_sales_response(business_id, updated)
 
     async def cancel_sales(self, business_id: str, sales_id: str, user_id: str) -> SalesResponse:
+        if self.session is not None:
+            async with self.session.begin():
+                return await self._cancel_sales_impl(business_id, sales_id, user_id)
+        else:
+            return await self._cancel_sales_impl(business_id, sales_id, user_id)
+
+    async def _cancel_sales_impl(self, business_id: str, sales_id: str, user_id: str) -> SalesResponse:
         await self._validate_access(
             business_id, user_id, required_roles=(BusinessMembershipRole.OWNER, BusinessMembershipRole.ADMIN)
         )
-        s = await self.sales_repo.get_sales_by_id(sales_id, business_id)
+        s = await self.sales_repo.get_sales_for_update(sales_id, business_id)
         if not s:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,

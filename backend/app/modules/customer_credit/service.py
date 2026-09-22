@@ -1,6 +1,7 @@
 from typing import Optional
 from decimal import Decimal
 from fastapi import HTTPException, status
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.customer_credit.schemas import (
     CreditLimitUpdate,
@@ -38,10 +39,12 @@ class CustomerCreditService:
         customer_repo: AbstractCustomerRepository = customer_repository,
         ledger_repo: AbstractStoreCreditLedgerRepository = store_credit_ledger_repository,
         membership_service: BusinessMembershipService = business_membership_service,
+        session: Optional[AsyncSession] = None,
     ):
         self.customer_repo = customer_repo
         self.ledger_repo = ledger_repo
         self.membership_service = membership_service
+        self.session = session
 
     async def _validate_access(
         self,
@@ -124,11 +127,31 @@ class CustomerCreditService:
         reference_type: Optional[str] = None,
         reference_id: Optional[str] = None,
     ) -> CustomerCreditSummaryResponse:
+        if self.session is not None:
+            async with self.session.begin():
+                return await self._issue_store_credit_impl(business_id, user_id, customer_id, payload, reference_type, reference_id)
+        else:
+            return await self._issue_store_credit_impl(business_id, user_id, customer_id, payload, reference_type, reference_id)
+
+    async def _issue_store_credit_impl(
+        self,
+        business_id: str,
+        user_id: str,
+        customer_id: str,
+        payload: StoreCreditAdjust,
+        reference_type: Optional[str] = None,
+        reference_id: Optional[str] = None,
+    ) -> CustomerCreditSummaryResponse:
         await self._validate_access(
             business_id, user_id,
             required_roles=(BusinessMembershipRole.OWNER, BusinessMembershipRole.ADMIN),
         )
-        customer = await self._get_customer_or_404(customer_id, business_id)
+        customer = await self.customer_repo.get_by_id_for_update(customer_id, business_id)
+        if not customer:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Customer not found.",
+            )
 
         # PRE-MUTATION RECONCILIATION — fail closed if cached balance diverges from ledger
         await self._verify_ledger_reconciliation(customer_id, business_id, customer.store_credit_balance)
@@ -167,7 +190,27 @@ class CustomerCreditService:
         reference_type: Optional[str] = None,
         reference_id: Optional[str] = None,
     ) -> CustomerCreditSummaryResponse:
-        customer = await self._get_customer_or_404(customer_id, business_id)
+        if self.session is not None:
+            async with self.session.begin():
+                return await self._redeem_store_credit_impl(business_id, user_id, customer_id, amount, reference_type, reference_id)
+        else:
+            return await self._redeem_store_credit_impl(business_id, user_id, customer_id, amount, reference_type, reference_id)
+
+    async def _redeem_store_credit_impl(
+        self,
+        business_id: str,
+        user_id: str,
+        customer_id: str,
+        amount: Decimal,
+        reference_type: Optional[str] = None,
+        reference_id: Optional[str] = None,
+    ) -> CustomerCreditSummaryResponse:
+        customer = await self.customer_repo.get_by_id_for_update(customer_id, business_id)
+        if not customer:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Customer not found.",
+            )
 
         # PRE-MUTATION RECONCILIATION — fail closed if cached balance diverges from ledger
         await self._verify_ledger_reconciliation(customer_id, business_id, customer.store_credit_balance)
@@ -298,6 +341,47 @@ class CustomerCreditService:
 
         if customer.credit_limit <= Decimal("0"):
             if projected_exposure > Decimal("0"):
+                # Send warning notification before rejection
+                try:
+                    from app.modules.notification.service import _send_notification
+                    from app.modules.notification.schemas import (
+                        NotificationScope, NotificationType, NotificationSeverity,
+                    )
+                    from app.modules.business_membership.repository import (
+                        business_membership_repository,
+                    )
+                    from app.modules.business_membership.schemas import (
+                        BusinessMembershipRole, BusinessMembershipStatus,
+                    )
+
+                    owner_admin_ids = [
+                        m.user_id
+                        for m in business_membership_repository._memberships.values()
+                        if m.business_id == business_id
+                        and m.status == BusinessMembershipStatus.ACTIVE
+                        and m.role in (BusinessMembershipRole.OWNER, BusinessMembershipRole.ADMIN)
+                    ]
+                    for member_id in owner_admin_ids:
+                        await _send_notification(
+                            recipient_id=member_id,
+                            scope=NotificationScope.TENANT,
+                            notif_type=NotificationType.CUSTOMER_CREDIT_LIMIT_WARNING,
+                            severity=NotificationSeverity.WARNING,
+                            title="Credit Limit Warning",
+                            message=f"Customer {customer.name} is near credit limit.",
+                            business_id=business_id,
+                            metadata={
+                                "customer_id": customer_id,
+                                "customer_name": customer.name,
+                                "credit_limit": str(customer.credit_limit),
+                                "exposure": str(projected_exposure),
+                                "sale_id": sales_id,
+                            },
+                            deduplication_key=f"CREDIT_WARNING:{customer_id}:{sales_id}:{member_id}",
+                        )
+                except Exception:
+                    pass
+
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail=(
@@ -309,6 +393,47 @@ class CustomerCreditService:
             return
 
         if projected_exposure > customer.credit_limit:
+            # Send warning notification before rejection
+            try:
+                from app.modules.notification.service import _send_notification
+                from app.modules.notification.schemas import (
+                    NotificationScope, NotificationType, NotificationSeverity,
+                )
+                from app.modules.business_membership.repository import (
+                    business_membership_repository,
+                )
+                from app.modules.business_membership.schemas import (
+                    BusinessMembershipRole, BusinessMembershipStatus,
+                )
+
+                owner_admin_ids = [
+                    m.user_id
+                    for m in business_membership_repository._memberships.values()
+                    if m.business_id == business_id
+                    and m.status == BusinessMembershipStatus.ACTIVE
+                    and m.role in (BusinessMembershipRole.OWNER, BusinessMembershipRole.ADMIN)
+                ]
+                for member_id in owner_admin_ids:
+                    await _send_notification(
+                        recipient_id=member_id,
+                        scope=NotificationScope.TENANT,
+                        notif_type=NotificationType.CUSTOMER_CREDIT_LIMIT_WARNING,
+                        severity=NotificationSeverity.WARNING,
+                        title="Credit Limit Warning",
+                        message=f"Customer {customer.name} is near credit limit.",
+                        business_id=business_id,
+                        metadata={
+                            "customer_id": customer_id,
+                            "customer_name": customer.name,
+                            "credit_limit": str(customer.credit_limit),
+                            "exposure": str(projected_exposure),
+                            "sale_id": sales_id,
+                        },
+                        deduplication_key=f"CREDIT_WARNING:{customer_id}:{sales_id}:{member_id}",
+                    )
+            except Exception:
+                pass
+
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=(

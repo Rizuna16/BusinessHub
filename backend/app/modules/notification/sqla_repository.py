@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 from typing import Optional, List
 
 from sqlalchemy import select, func, and_, desc
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.notification.models import Notification as NotificationModel
@@ -50,8 +51,18 @@ class SQLAlchemyNotificationRepository(AbstractNotificationRepository):
             "metadata_json": notification.metadata,
             "deduplication_key": notification.deduplication_key,
         }
-        obj = await sa_create(self.session, NotificationModel, data)
-        return _to_notification(obj)
+        try:
+            obj = await sa_create(self.session, NotificationModel, data)
+            return _to_notification(obj)
+        except IntegrityError:
+            # Concurrent deduplication: another request inserted first.
+            # Rollback the failed transaction, then re-query.
+            await self.session.rollback()
+            if notification.deduplication_key:
+                existing = await self.find_by_deduplication_key(notification.deduplication_key)
+                if existing:
+                    return existing
+            raise
 
     async def get_by_id(self, notification_id: str) -> Optional[Notification]:
         stmt = select(NotificationModel).where(NotificationModel.id == notification_id)

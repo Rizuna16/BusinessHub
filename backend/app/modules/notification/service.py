@@ -1,6 +1,15 @@
+"""
+Notification service with operation-scoped production persistence.
+
+Feature #66: Notification Expansion + Production Persistence
+
+Production notification writes use operation-scoped AsyncSession.
+InMemory notification repository remains for tests only.
+"""
 from datetime import datetime, timezone
 from typing import List, Optional
 import uuid
+import logging
 from fastapi import HTTPException, status
 
 from app.modules.notification.schemas import (
@@ -12,6 +21,44 @@ from app.modules.notification.schemas import (
     UnreadCountResponse,
 )
 from app.modules.notification.repository import AbstractNotificationRepository, notification_repository
+
+logger = logging.getLogger("notification")
+
+
+async def _send_notification(
+    recipient_id: str,
+    scope: NotificationScope,
+    notif_type: NotificationType,
+    severity: NotificationSeverity,
+    title: str,
+    message: str,
+    business_id: Optional[str] = None,
+    metadata: Optional[dict] = None,
+    deduplication_key: Optional[str] = None,
+) -> None:
+    """
+    Operation-scoped notification write.
+
+    Opens its own AsyncSession, persists notification, commits, closes.
+    Primary business transaction is never affected by notification failure.
+    """
+    from app.core.database import async_session_factory
+    from app.modules.notification.sqla_repository import SQLAlchemyNotificationRepository
+
+    async with async_session_factory() as session:
+        svc = NotificationService(SQLAlchemyNotificationRepository(session))
+        await svc.create_if_not_exists(
+            recipient_id=recipient_id,
+            scope=scope,
+            type=notif_type,
+            severity=severity,
+            title=title,
+            message=message,
+            business_id=business_id,
+            metadata=metadata,
+            deduplication_key=deduplication_key,
+        )
+        await session.commit()
 
 
 class NotificationService:
@@ -152,10 +199,10 @@ class NotificationService:
         for admin_id in super_admin_ids:
             dedup = f"{deduplication_key}:{admin_id}" if deduplication_key else None
             try:
-                await self.create_if_not_exists(
+                await _send_notification(
                     recipient_id=admin_id,
                     scope=NotificationScope.PLATFORM,
-                    type=type,
+                    notif_type=type,
                     severity=severity,
                     title=title,
                     message=message,
@@ -164,7 +211,10 @@ class NotificationService:
                     deduplication_key=dedup,
                 )
             except Exception:
-                pass
+                logger.exception(
+                    "notification_send_failed recipient=%s type=%s",
+                    admin_id, type.value,
+                )
 
     async def notify_business_members(
         self,
@@ -180,10 +230,10 @@ class NotificationService:
         for member_id in member_ids:
             dedup = f"{deduplication_key}:{member_id}" if deduplication_key else None
             try:
-                await self.create_if_not_exists(
+                await _send_notification(
                     recipient_id=member_id,
                     scope=NotificationScope.TENANT,
-                    type=type,
+                    notif_type=type,
                     severity=severity,
                     title=title,
                     message=message,
@@ -192,7 +242,10 @@ class NotificationService:
                     deduplication_key=dedup,
                 )
             except Exception:
-                pass
+                logger.exception(
+                    "notification_send_failed recipient=%s type=%s business=%s",
+                    member_id, type.value, business_id,
+                )
 
 
 notification_service = NotificationService()

@@ -29,6 +29,7 @@ from app.modules.purchase.repository import purchase_repository
 from app.modules.warehouse.repository import inventory_location_repository
 from app.modules.purchase.schemas import PurchaseStatus
 from app.modules.warehouse.schemas import InventoryLocationStatus
+from app.modules.inventory_batch.service import inventory_batch_service
 
 
 class ReceivingService:
@@ -168,8 +169,23 @@ class ReceivingService:
     ) -> ReceivingResponse:
         if self.session is not None:
             async with self.session.begin():
-                return await self._create_receiving_impl(business_id, user_id, payload)
-        return await self._create_receiving_impl(business_id, user_id, payload)
+                return await self._create_receiving_with_retry(business_id, user_id, payload)
+        return await self._create_receiving_with_retry(business_id, user_id, payload)
+
+    async def _create_receiving_with_retry(self, business_id: str, user_id: str, payload: ReceivingCreate) -> ReceivingResponse:
+        for attempt in range(3):
+            try:
+                if self.session is not None:
+                    async with self.session.begin_nested():
+                        return await self._create_receiving_impl(business_id, user_id, payload)
+                else:
+                    return await self._create_receiving_impl(business_id, user_id, payload)
+            except Exception as e:
+                err_str = str(e).lower()
+                if ("unique" in err_str and ("receiving_number" in err_str or "uq_receiving" in err_str)) and attempt < 2:
+                    continue
+                raise
+        raise HTTPException(status_code=409, detail="Document number collision; please retry")
 
     async def _create_receiving_impl(
         self, business_id: str, user_id: str, payload: ReceivingCreate
@@ -380,6 +396,7 @@ class ReceivingService:
             product_id=purchase_line.product_id,
             variant_id=purchase_line.variant_id,
             quantity=payload.quantity,
+            batch_allocations=payload.batch_allocations,
         )
 
         return ReceivingLineResponse.model_validate(line)
@@ -564,6 +581,28 @@ class ReceivingService:
                     detail=f"Over-receiving at finalization: purchase_line={pline_id} ordered={purchase_line.quantity}, total_received={total_for_line}.",
                 )
 
+        from app.modules.inventory.service import inventory_service
+        from app.modules.inventory.schemas import (
+            MovementType, MovementDirection, ReferenceType as InvReferenceType,
+            InventoryCostMovementType,
+        )
+        from app.modules.product.repository import product_repository
+
+        product_repo = product_repository
+
+        await inventory_service._validate_location(business_id, r.inventory_location_id)
+
+        existing_movements = await inventory_service.movement_repo.list_movements(
+            business_id=business_id,
+            movement_type=MovementType.ADJUSTMENT_IN,
+        )
+        for m in existing_movements:
+            if m.reference_type == InvReferenceType.RECEIVING and m.reference_id == receiving_id:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Receiving has already been finalized. Duplicate finalization rejected.",
+                )
+
         now = datetime.now(timezone.utc)
         updated = await self.receiving_repo.update_receiving(
             receiving_id=receiving_id,
@@ -573,7 +612,128 @@ class ReceivingService:
             finalized_at=now,
         )
 
+        for line in lines:
+            allocations = getattr(line, 'batch_allocations', None) or []
+            for alloc in allocations:
+                await inventory_batch_service.record_batch_inbound(
+                    business_id=r.business_id,
+                    inventory_location_id=r.inventory_location_id,
+                    product_id=line.product_id,
+                    variant_id=line.variant_id,
+                    batch_number=alloc.get("batch_number", f"AUTO-{line.id}"),
+                    quantity=Decimal(str(alloc.get("quantity", 0))),
+                    manufacture_date=None,
+                    expiry_date=None,
+                    stock_movement_id=f"RCV:{receiving_id}:{line.id}",
+                )
+
+        for line in lines:
+            movement = await inventory_service.movement_repo.create_movement(
+                business_id=business_id,
+                movement_type=MovementType.ADJUSTMENT_IN,
+                performed_by_user_id=user_id,
+                reference_type=InvReferenceType.RECEIVING,
+                reference_id=receiving_id,
+                notes=f"Stock inbound from Receiving {receiving_id}",
+            )
+
+            await inventory_service.movement_repo.create_line(
+                movement_id=movement.id,
+                inventory_location_id=r.inventory_location_id,
+                product_id=line.product_id,
+                variant_id=line.variant_id,
+                quantity=line.quantity,
+                direction=MovementDirection.IN,
+            )
+
+            await inventory_service.balance_repo.upsert_balance(
+                business_id=business_id,
+                inventory_location_id=r.inventory_location_id,
+                product_id=line.product_id,
+                variant_id=line.variant_id,
+                delta=line.quantity,
+            )
+
+            purchase_line = await self.purchase_repo.get_line_by_id(line.purchase_line_id, r.purchase_id)
+            if not purchase_line:
+                plines = await self.purchase_repo.list_lines_for_purchase(r.purchase_id)
+                for pl in plines:
+                    if pl.id == line.purchase_line_id:
+                        purchase_line = pl
+                        break
+
+            if purchase_line and purchase_line.quantity and purchase_line.quantity > Decimal("0"):
+                unit_cost = purchase_line.unit_price
+                await inventory_service.record_cost_inbound(
+                    business_id=business_id,
+                    product_id=line.product_id,
+                    variant_id=line.variant_id,
+                    inbound_qty=line.quantity,
+                    inbound_unit_cost=unit_cost,
+                    movement_type=InventoryCostMovementType.PURCHASE_RECEIVING,
+                    reference_type="RECEIVING",
+                    reference_id=receiving_id,
+                )
+
+        for line in lines:
+            has_batches = await inventory_batch_service.has_batch_balances(
+                r.business_id, r.inventory_location_id, line.product_id, line.variant_id,
+            )
+            if has_batches:
+                balance = await inventory_service.balance_repo.get_balance(
+                    business_id, r.inventory_location_id, line.product_id, line.variant_id,
+                )
+                aggregate_qty = balance.quantity if balance else Decimal("0")
+                await inventory_batch_service.validate_batch_aggregate_invariant(
+                    r.business_id, r.inventory_location_id, line.product_id, line.variant_id,
+                    aggregate_quantity=aggregate_qty,
+                )
+
         line_resp = [ReceivingLineResponse.model_validate(l) for l in lines]
+
+        # ── NOTIFICATION (post-commit, failure-isolated) ──
+        try:
+            from app.modules.notification.service import _send_notification
+            from app.modules.notification.schemas import (
+                NotificationScope, NotificationType, NotificationSeverity,
+            )
+            from app.modules.business_membership.repository import (
+                business_membership_repository,
+            )
+            from app.modules.business_membership.schemas import (
+                BusinessMembershipRole, BusinessMembershipStatus,
+            )
+
+            purchase = await self.purchase_repo.get_purchase_by_id(r.purchase_id, business_id)
+            purchase_number = purchase.purchase_number if purchase else "N/A"
+
+            owner_admin_ids = [
+                m.user_id
+                for m in business_membership_repository._memberships.values()
+                if m.business_id == business_id
+                and m.status == BusinessMembershipStatus.ACTIVE
+                and m.role in (BusinessMembershipRole.OWNER, BusinessMembershipRole.ADMIN)
+            ]
+            for member_id in owner_admin_ids:
+                await _send_notification(
+                    recipient_id=member_id,
+                    scope=NotificationScope.TENANT,
+                    notif_type=NotificationType.PURCHASE_RECEIVED,
+                    severity=NotificationSeverity.INFO,
+                    title="Goods Received",
+                    message=f"Receiving {updated.receiving_number} for purchase {purchase_number} has been finalized.",
+                    business_id=business_id,
+                    metadata={
+                        "receiving_id": receiving_id,
+                        "purchase_id": r.purchase_id,
+                        "receiving_number": updated.receiving_number,
+                        "branch_id": None,
+                    },
+                    deduplication_key=f"PURCHASE_RECEIVED:{receiving_id}:{member_id}",
+                )
+        except Exception:
+            pass
+
         return ReceivingResponse(**updated.model_dump(), lines=line_resp)
 
     async def cancel_receiving(
