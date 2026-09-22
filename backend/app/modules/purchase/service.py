@@ -260,9 +260,24 @@ class PurchaseService:
     ) -> PurchaseResponse:
         if self.session is not None:
             async with self.session.begin():
-                return await self._create_purchase_impl(business_id, user_id, payload)
+                return await self._create_purchase_with_retry(business_id, user_id, payload)
         else:
-            return await self._create_purchase_impl(business_id, user_id, payload)
+            return await self._create_purchase_with_retry(business_id, user_id, payload)
+
+    async def _create_purchase_with_retry(self, business_id: str, user_id: str, payload: PurchaseCreate) -> PurchaseResponse:
+        for attempt in range(3):
+            try:
+                if self.session is not None:
+                    async with self.session.begin_nested():
+                        return await self._create_purchase_impl(business_id, user_id, payload)
+                else:
+                    return await self._create_purchase_impl(business_id, user_id, payload)
+            except Exception as e:
+                err_str = str(e).lower()
+                if ("unique" in err_str and ("purchase_number" in err_str or "uq_purchase" in err_str)) and attempt < 2:
+                    continue
+                raise
+        raise HTTPException(status_code=409, detail="Document number collision; please retry")
 
     async def _create_purchase_impl(
         self, business_id: str, user_id: str, payload: PurchaseCreate

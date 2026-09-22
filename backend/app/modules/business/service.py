@@ -48,7 +48,7 @@ class BusinessService:
         """
         # Begin explicit database transaction at the very start before any query execution
         if self.session is not None:
-            async with self.session.begin():
+            async with self.session.begin_nested():
                 used_slugs = await self._generate_unique_slug(business_data.name)
                 slug = used_slugs  # _generate_unique_slug returns the final unique slug
 
@@ -142,10 +142,10 @@ class BusinessService:
         Update a business.
         - Requester must have active membership.
         - Role must be OWNER or ADMIN (MEMBER is read-only).
-        Primary transaction boundary: session.begin() when session available.
+        Primary transaction boundary: session.begin_nested() when session available.
         """
         if self.session is not None:
-            async with self.session.begin():
+            async with self.session.begin_nested():
                 membership = await self.membership_service.require_active_membership(business_id, user_id)
                 if membership.role not in (BusinessMembershipRole.OWNER, BusinessMembershipRole.ADMIN):
                     raise HTTPException(
@@ -185,10 +185,10 @@ class BusinessService:
         Soft-archive a business.
         - Requester must have active membership.
         - Only OWNER can archive a business.
-        Primary transaction boundary: session.begin() when session available.
+        Primary transaction boundary: session.begin_nested() when session available.
         """
         if self.session is not None:
-            async with self.session.begin():
+            async with self.session.begin_nested():
                 membership = await self.membership_service.require_active_membership(business_id, user_id)
                 if membership.role != BusinessMembershipRole.OWNER:
                     raise HTTPException(

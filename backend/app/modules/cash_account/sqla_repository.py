@@ -102,6 +102,15 @@ class SQLAlchemyCashAccountRepository(AbstractCashAccountRepository):
         obj = res.scalar_one_or_none()
         return _to_account(obj) if obj else None
 
+    async def get_account_by_id_for_update(self, account_id: str, business_id: str) -> Optional[CashAccountInDB]:
+        stmt = select(CashAccountModel).where(
+            CashAccountModel.id == account_id,
+            CashAccountModel.business_id == business_id,
+        ).with_for_update()
+        res = await self.session.execute(stmt)
+        obj = res.scalar_one_or_none()
+        return _to_account(obj) if obj else None
+
     async def get_account_by_code(self, business_id: str, code: str) -> Optional[CashAccountInDB]:
         code_upper = code.upper()
         stmt = select(CashAccountModel).where(

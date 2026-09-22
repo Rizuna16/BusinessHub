@@ -50,6 +50,9 @@ class AbstractCustomerRepository(ABC):
     async def get_by_id(self, customer_id: str, business_id: str) -> Optional[CustomerInDB]:
         pass
 
+    async def get_by_id_for_update(self, customer_id: str, business_id: str) -> Optional[CustomerInDB]:
+        return await self.get_by_id(customer_id, business_id)
+
     @abstractmethod
     async def list_by_business(
         self,
@@ -147,6 +150,9 @@ class InMemoryCustomerRepository(AbstractCustomerRepository):
         return customer
 
     async def get_by_id(self, customer_id: str, business_id: str) -> Optional[CustomerInDB]:
+        return self._customers.get(self._key(business_id, customer_id))
+
+    async def get_by_id_for_update(self, customer_id: str, business_id: str) -> Optional[CustomerInDB]:
         return self._customers.get(self._key(business_id, customer_id))
 
     async def list_by_business(

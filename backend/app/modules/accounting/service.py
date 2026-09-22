@@ -2,6 +2,7 @@ from typing import List, Optional
 from decimal import Decimal
 from datetime import datetime, timezone, date, timedelta
 from fastapi import HTTPException, status
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.accounting.schemas import (
     AccountInDB,
@@ -108,6 +109,7 @@ class AccountingService:
         expense_repo: AbstractExpenseRepository = expense_repository,
         cash_account_repo: AbstractCashAccountRepository = cash_account_repository,
         branch_repo=None,
+        session: Optional[AsyncSession] = None,
     ):
         self.repository = repository
         self.membership_service = membership_service
@@ -115,6 +117,7 @@ class AccountingService:
         self.expense_repo = expense_repo
         self.cash_account_repo = cash_account_repo
         self.branch_repo = branch_repo
+        self.session = session
 
     async def _validate_access(
         self,
@@ -288,6 +291,32 @@ class AccountingService:
     # --- Journal Entry & Posting Engine ---
 
     async def create_and_post_journal(
+        self, business_id: str, user_id: str, payload: JournalEntryCreate
+    ) -> JournalEntryResponse:
+        if self.session is not None:
+            async with self.session.begin():
+                return await self._create_and_post_journal_with_retry(business_id, user_id, payload)
+        else:
+            return await self._create_and_post_journal_with_retry(business_id, user_id, payload)
+
+    async def _create_and_post_journal_with_retry(
+        self, business_id: str, user_id: str, payload: JournalEntryCreate
+    ) -> JournalEntryResponse:
+        for attempt in range(3):
+            try:
+                if self.session is not None:
+                    async with self.session.begin_nested():
+                        return await self._create_and_post_journal_impl(business_id, user_id, payload)
+                else:
+                    return await self._create_and_post_journal_impl(business_id, user_id, payload)
+            except Exception as e:
+                err_str = str(e).lower()
+                if ("unique" in err_str and ("journal_number" in err_str or "uq_journal" in err_str)) and attempt < 2:
+                    continue
+                raise
+        raise HTTPException(status_code=409, detail="Document number collision; please retry")
+
+    async def _create_and_post_journal_impl(
         self, business_id: str, user_id: str, payload: JournalEntryCreate
     ) -> JournalEntryResponse:
         await self._validate_access(

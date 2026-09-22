@@ -2,6 +2,7 @@ from typing import List, Optional
 from decimal import Decimal
 from datetime import datetime, timezone
 from fastapi import HTTPException, status
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.expense.schemas import (
     ExpenseInDB,
@@ -44,9 +45,11 @@ class ExpenseService:
         self,
         expense_repo: AbstractExpenseRepository = expense_repository,
         membership_service: BusinessMembershipService = business_membership_service,
+        session: Optional[AsyncSession] = None,
     ):
         self.expense_repo = expense_repo
         self.membership_service = membership_service
+        self.session = session
 
     async def _validate_access(
         self,
@@ -226,6 +229,30 @@ class ExpenseService:
     async def create_expense(
         self, business_id: str, user_id: str, payload: ExpenseCreate
     ) -> ExpenseResponse:
+        if self.session is not None:
+            async with self.session.begin():
+                return await self._create_expense_with_retry(business_id, user_id, payload)
+        else:
+            return await self._create_expense_with_retry(business_id, user_id, payload)
+
+    async def _create_expense_with_retry(self, business_id: str, user_id: str, payload: ExpenseCreate) -> ExpenseResponse:
+        for attempt in range(3):
+            try:
+                if self.session is not None:
+                    async with self.session.begin_nested():
+                        return await self._create_expense_impl(business_id, user_id, payload)
+                else:
+                    return await self._create_expense_impl(business_id, user_id, payload)
+            except Exception as e:
+                err_str = str(e).lower()
+                if ("unique" in err_str and ("expense_number" in err_str or "uq_expense" in err_str)) and attempt < 2:
+                    continue
+                raise
+        raise HTTPException(status_code=409, detail="Document number collision; please retry")
+
+    async def _create_expense_impl(
+        self, business_id: str, user_id: str, payload: ExpenseCreate
+    ) -> ExpenseResponse:
         await self._validate_access(
             business_id, user_id, required_roles=(BusinessMembershipRole.OWNER, BusinessMembershipRole.ADMIN)
         )
@@ -349,6 +376,15 @@ class ExpenseService:
         return await self._build_expense_response(business_id, updated)
 
     async def finalize_expense(
+        self, business_id: str, expense_id: str, user_id: str
+    ) -> ExpenseResponse:
+        if self.session is not None:
+            async with self.session.begin():
+                return await self._finalize_expense_impl(business_id, expense_id, user_id)
+        else:
+            return await self._finalize_expense_impl(business_id, expense_id, user_id)
+
+    async def _finalize_expense_impl(
         self, business_id: str, expense_id: str, user_id: str
     ) -> ExpenseResponse:
         await self._validate_access(

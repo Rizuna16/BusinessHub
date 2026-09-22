@@ -34,6 +34,9 @@ class AbstractCashAccountRepository(ABC):
     async def get_account_by_id(self, account_id: str, business_id: str) -> Optional[CashAccountInDB]:
         pass
 
+    async def get_account_by_id_for_update(self, account_id: str, business_id: str) -> Optional[CashAccountInDB]:
+        return await self.get_account_by_id(account_id, business_id)
+
     @abstractmethod
     async def get_account_by_code(self, business_id: str, code: str) -> Optional[CashAccountInDB]:
         pass
@@ -163,6 +166,12 @@ class InMemoryCashAccountRepository(AbstractCashAccountRepository):
         return account
 
     async def get_account_by_id(self, account_id: str, business_id: str) -> Optional[CashAccountInDB]:
+        a = self._accounts.get(account_id)
+        if not a or a.business_id != business_id:
+            return None
+        return a
+
+    async def get_account_by_id_for_update(self, account_id: str, business_id: str) -> Optional[CashAccountInDB]:
         a = self._accounts.get(account_id)
         if not a or a.business_id != business_id:
             return None

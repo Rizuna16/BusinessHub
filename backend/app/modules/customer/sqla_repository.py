@@ -80,6 +80,15 @@ class SQLAlchemyCustomerRepository(AbstractCustomerRepository):
         obj = result.scalar_one_or_none()
         return _to_customer_in_db(obj) if obj else None
 
+    async def get_by_id_for_update(self, customer_id: str, business_id: str) -> Optional[CustomerInDB]:
+        stmt = select(Customer).where(
+            Customer.id == customer_id,
+            Customer.business_id == business_id,
+        ).with_for_update()
+        result = await self.session.execute(stmt)
+        obj = result.scalar_one_or_none()
+        return _to_customer_in_db(obj) if obj else None
+
     async def list_by_business(
         self,
         business_id: str,

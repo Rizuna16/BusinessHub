@@ -1,17 +1,51 @@
 import pytest
+import asyncio
 from datetime import datetime, timezone, timedelta
 from fastapi.testclient import TestClient
+from sqlalchemy import delete, text
+from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 
 from app.main import app
+from app.core.config import settings
+from app.core.database import get_db_session, async_session_factory
 from app.modules.authentication.repository import InMemoryUserRepository, user_repository
 from app.modules.authentication.security import hash_password, verify_password, create_access_token
+from app.modules.authentication.models import User
+
+
+async def _clear_pg_users():
+    """Delete all users from PostgreSQL using a fresh engine (avoids event loop conflicts)."""
+    engine = create_async_engine(settings.database_url, echo=False, pool_size=1, pool_pre_ping=True)
+    try:
+        async with async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)() as session:
+            await session.execute(delete(User))
+            await session.commit()
+    finally:
+        await engine.dispose()
+
+
+async def _committing_get_db_session():
+    """Test override: auto-commit session so data persists between HTTP requests."""
+    async with async_session_factory() as session:
+        try:
+            yield session
+            if session.is_active:
+                await session.commit()
+        except Exception:
+            if session.is_active:
+                await session.rollback()
+            raise
 
 
 @pytest.fixture(autouse=True)
 def clear_user_repo():
     InMemoryUserRepository.clear()
+    asyncio.run(_clear_pg_users())
+    app.dependency_overrides[get_db_session] = _committing_get_db_session
     yield
+    app.dependency_overrides.pop(get_db_session, None)
     InMemoryUserRepository.clear()
+    asyncio.run(_clear_pg_users())
 
 
 @pytest.fixture
@@ -156,8 +190,15 @@ def test_login_inactive_user(client: TestClient):
     res = client.post("/api/v1/auth/register", json=reg_payload)
     user_id = res.json()["id"]
 
-    import asyncio
-    asyncio.run(user_repository.update_status(user_id, is_active=False))
+    async def _deactivate_user(uid):
+        engine = create_async_engine(settings.database_url, echo=False, pool_size=1, pool_pre_ping=True)
+        try:
+            async with async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)() as session:
+                await session.execute(text("UPDATE users SET is_active = false WHERE id = :id"), {"id": uid})
+                await session.commit()
+        finally:
+            await engine.dispose()
+    asyncio.run(_deactivate_user(user_id))
 
     login_res = client.post("/api/v1/auth/login", json={"email": "user@example.com", "password": "Password123"})
     assert login_res.status_code == 403

@@ -2,6 +2,7 @@ from typing import List, Optional
 from decimal import Decimal
 from datetime import datetime, timezone
 from fastapi import HTTPException, status
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.payment.schemas import (
     PaymentInDB,
@@ -45,9 +46,11 @@ class PaymentService:
         self,
         payment_repo: AbstractPaymentRepository = payment_repository,
         membership_service: BusinessMembershipService = business_membership_service,
+        session: Optional[AsyncSession] = None,
     ):
         self.payment_repo = payment_repo
         self.membership_service = membership_service
+        self.session = session
 
     async def _validate_access(
         self,
@@ -64,6 +67,30 @@ class PaymentService:
         return membership
 
     async def create_payment(
+        self, business_id: str, user_id: str, payload: PaymentCreate
+    ) -> PaymentResponse:
+        if self.session is not None:
+            async with self.session.begin():
+                return await self._create_payment_with_retry(business_id, user_id, payload)
+        else:
+            return await self._create_payment_with_retry(business_id, user_id, payload)
+
+    async def _create_payment_with_retry(self, business_id: str, user_id: str, payload: PaymentCreate) -> PaymentResponse:
+        for attempt in range(3):
+            try:
+                if self.session is not None:
+                    async with self.session.begin_nested():
+                        return await self._create_payment_impl(business_id, user_id, payload)
+                else:
+                    return await self._create_payment_impl(business_id, user_id, payload)
+            except Exception as e:
+                err_str = str(e).lower()
+                if ("unique" in err_str and ("payment_number" in err_str or "uq_payment" in err_str)) and attempt < 2:
+                    continue
+                raise
+        raise HTTPException(status_code=409, detail="Document number collision; please retry")
+
+    async def _create_payment_impl(
         self, business_id: str, user_id: str, payload: PaymentCreate
     ) -> PaymentResponse:
         await self._validate_access(
@@ -349,6 +376,13 @@ class PaymentService:
         return PaymentResponse(**p.model_dump())
 
     async def void_payment(self, business_id: str, payment_id: str, user_id: str) -> PaymentResponse:
+        if self.session is not None:
+            async with self.session.begin():
+                return await self._void_payment_impl(business_id, payment_id, user_id)
+        else:
+            return await self._void_payment_impl(business_id, payment_id, user_id)
+
+    async def _void_payment_impl(self, business_id: str, payment_id: str, user_id: str) -> PaymentResponse:
         await self._validate_access(business_id, user_id, required_roles=(BusinessMembershipRole.OWNER, BusinessMembershipRole.ADMIN))
         
         p = await self.payment_repo.get_payment_by_id(payment_id, business_id)

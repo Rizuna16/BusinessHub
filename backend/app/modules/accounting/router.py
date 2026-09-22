@@ -1,10 +1,14 @@
 from typing import Optional
 from datetime import datetime, date
 from fastapi import APIRouter, Depends, Path, Query, status
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.core.database import get_db_session
+from app.core.container import RepositoryContainer
 from app.modules.authentication.router import get_current_user
 from app.modules.authentication.schemas import UserResponse
+from app.modules.business_membership.service import BusinessMembershipService
 from app.modules.accounting.schemas import (
     AccountCreate,
     AccountUpdate,
@@ -41,6 +45,25 @@ router = APIRouter(
 
 def get_accounting_service() -> AccountingService:
     return accounting_service
+
+
+async def get_scoped_accounting_service(session: AsyncSession = Depends(get_db_session)) -> AccountingService:
+    container = RepositoryContainer(session)
+    membership_svc = BusinessMembershipService(
+        repository=container.business_membership,
+        user_repo=container.user,
+        account_repo=container.account,
+        business_repo=container.business,
+    )
+    return AccountingService(
+        repository=container.accounting,
+        membership_service=membership_svc,
+        payment_repo=container.payment,
+        expense_repo=container.expense,
+        cash_account_repo=container.cash_account,
+        branch_repo=container.branch,
+        session=session,
+    )
 
 
 # --- Chart of Accounts Routes ---
@@ -127,7 +150,7 @@ async def create_and_post_journal(
     payload: JournalEntryCreate,
     business_id: str = Path(...),
     current_user: UserResponse = Depends(get_current_user),
-    service: AccountingService = Depends(get_accounting_service),
+    service: AccountingService = Depends(get_scoped_accounting_service),
 ):
     return await service.create_and_post_journal(business_id=business_id, user_id=current_user.id, payload=payload)
 

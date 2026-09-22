@@ -234,7 +234,7 @@ class CashAccountService:
         await self._validate_access(
             business_id, user_id, required_roles=(BusinessMembershipRole.OWNER, BusinessMembershipRole.ADMIN)
         )
-        account = await self.account_repo.get_account_by_id(account_id, business_id)
+        account = await self.account_repo.get_account_by_id_for_update(account_id, business_id)
         if not account or account.status != CashAccountStatus.ACTIVE:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -284,8 +284,8 @@ class CashAccountService:
                 detail="Source and destination accounts must be different.",
             )
 
-        source = await self.account_repo.get_account_by_id(payload.source_account_id, business_id)
-        dest = await self.account_repo.get_account_by_id(payload.destination_account_id, business_id)
+        source = await self.account_repo.get_account_by_id_for_update(payload.source_account_id, business_id)
+        dest = await self.account_repo.get_account_by_id_for_update(payload.destination_account_id, business_id)
 
         if not source or source.status != CashAccountStatus.ACTIVE:
             raise HTTPException(

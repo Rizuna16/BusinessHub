@@ -26,6 +26,7 @@ import app.modules.customer_credit.models
 import app.modules.delivery_note.models
 import app.modules.expense.models
 import app.modules.inventory.models
+import app.modules.inventory_batch.models
 import app.modules.notification.models
 import app.modules.payment.models
 import app.modules.platform_admin.models

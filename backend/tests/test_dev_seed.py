@@ -1,17 +1,50 @@
 import pytest
 import asyncio
 from fastapi.testclient import TestClient
+from sqlalchemy import delete, text
+from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 
 from app.main import app
 from app.core.config import settings
+from app.core.database import get_db_session, async_session_factory
 from app.modules.authentication.repository import InMemoryUserRepository, user_repository
+from app.modules.authentication.security import hash_password
+from app.modules.authentication.models import User
+
+
+async def _clear_pg_users():
+    """Delete all users from PostgreSQL using a fresh engine (avoids event loop conflicts)."""
+    engine = create_async_engine(settings.database_url, echo=False, pool_size=1, pool_pre_ping=True)
+    try:
+        async with async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)() as session:
+            await session.execute(delete(User))
+            await session.commit()
+    finally:
+        await engine.dispose()
+
+
+async def _committing_get_db_session():
+    """Test override: auto-commit session so data persists between HTTP requests."""
+    async with async_session_factory() as session:
+        try:
+            yield session
+            if session.is_active:
+                await session.commit()
+        except Exception:
+            if session.is_active:
+                await session.rollback()
+            raise
 
 
 @pytest.fixture(autouse=True)
 def clear_user_repo():
     InMemoryUserRepository.clear()
+    asyncio.run(_clear_pg_users())
+    app.dependency_overrides[get_db_session] = _committing_get_db_session
     yield
+    app.dependency_overrides.pop(get_db_session, None)
     InMemoryUserRepository.clear()
+    asyncio.run(_clear_pg_users())
 
 
 @pytest.fixture
@@ -35,11 +68,25 @@ def test_seed_creates_user_when_empty(client: TestClient):
 
 # 2. Seeded password can authenticate
 def test_seeded_password_authenticates(client: TestClient):
-    asyncio.run(InMemoryUserRepository.seed_development_user(
-        email=settings.dev_seed_email,
-        plain_password=settings.dev_seed_password,
-        full_name=settings.dev_seed_name,
-    ))
+    async def _seed_pg():
+        engine = create_async_engine(settings.database_url, echo=False, pool_size=1, pool_pre_ping=True)
+        try:
+            async with async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)() as session:
+                from app.modules.authentication.sqla_repository import SQLAlchemyUserRepository
+                from app.modules.authentication.schemas import UserCreate
+                repo = SQLAlchemyUserRepository(session)
+                user_data = UserCreate(
+                    email=settings.dev_seed_email,
+                    full_name=settings.dev_seed_name,
+                    password=settings.dev_seed_password,
+                    password_confirmation=settings.dev_seed_password,
+                )
+                await repo.create(user_data)
+                await session.commit()
+        finally:
+            await engine.dispose()
+    asyncio.run(_seed_pg())
+
     response = client.post("/api/v1/auth/login", json={
         "email": settings.dev_seed_email,
         "password": settings.dev_seed_password,

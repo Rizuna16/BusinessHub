@@ -1,8 +1,11 @@
 from typing import Optional
 from datetime import datetime
 from fastapi import APIRouter, Depends, Path, Query, status
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.core.database import get_db_session
+from app.core.container import RepositoryContainer
 from app.modules.authentication.router import get_current_user
 from app.modules.authentication.schemas import UserResponse
 from app.modules.payment.schemas import (
@@ -20,6 +23,7 @@ from app.modules.payment.service import (
     PaymentService,
     payment_service,
 )
+from app.modules.business_membership.service import BusinessMembershipService
 
 
 router = APIRouter(
@@ -32,12 +36,30 @@ def get_payment_service() -> PaymentService:
     return payment_service
 
 
+async def get_scoped_payment_service(session: AsyncSession = Depends(get_db_session)) -> PaymentService:
+    """
+    Request-scoped PaymentService wired to the same AsyncSession for transaction boundary.
+    """
+    container = RepositoryContainer(session)
+    membership_svc = BusinessMembershipService(
+        repository=container.business_membership,
+        user_repo=container.user,
+        account_repo=container.account,
+        business_repo=container.business,
+    )
+    return PaymentService(
+        payment_repo=container.payment,
+        membership_service=membership_svc,
+        session=session,
+    )
+
+
 @router.post("", response_model=PaymentResponse, status_code=status.HTTP_201_CREATED)
 async def create_payment(
     business_id: str = Path(...),
     payload: PaymentCreate = ...,
     current_user: UserResponse = Depends(get_current_user),
-    service: PaymentService = Depends(get_payment_service),
+    service: PaymentService = Depends(get_scoped_payment_service),
 ):
     return await service.create_payment(business_id=business_id, user_id=current_user.id, payload=payload)
 
@@ -51,7 +73,7 @@ async def list_payments(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     current_user: UserResponse = Depends(get_current_user),
-    service: PaymentService = Depends(get_payment_service),
+    service: PaymentService = Depends(get_scoped_payment_service),
 ):
     return await service.list_payments(
         business_id=business_id, user_id=current_user.id, direction=direction,
@@ -64,7 +86,7 @@ async def get_payment(
     business_id: str = Path(...),
     payment_id: str = Path(...),
     current_user: UserResponse = Depends(get_current_user),
-    service: PaymentService = Depends(get_payment_service),
+    service: PaymentService = Depends(get_scoped_payment_service),
 ):
     return await service.get_payment(business_id=business_id, payment_id=payment_id, user_id=current_user.id)
 
@@ -74,7 +96,7 @@ async def void_payment(
     business_id: str = Path(...),
     payment_id: str = Path(...),
     current_user: UserResponse = Depends(get_current_user),
-    service: PaymentService = Depends(get_payment_service),
+    service: PaymentService = Depends(get_scoped_payment_service),
 ):
     return await service.void_payment(business_id=business_id, payment_id=payment_id, user_id=current_user.id)
 
@@ -90,7 +112,7 @@ async def get_payment_analytics_summary(
     direction: Optional[PaymentDirection] = Query(None),
     payment_method: Optional[PaymentMethod] = Query(None),
     current_user: UserResponse = Depends(get_current_user),
-    service: PaymentService = Depends(get_payment_service),
+    service: PaymentService = Depends(get_scoped_payment_service),
 ):
     return await service.get_payment_analytics_summary(
         business_id=business_id, user_id=current_user.id,
@@ -108,7 +130,7 @@ async def get_payment_analytics_by_direction(
     direction: Optional[PaymentDirection] = Query(None),
     payment_method: Optional[PaymentMethod] = Query(None),
     current_user: UserResponse = Depends(get_current_user),
-    service: PaymentService = Depends(get_payment_service),
+    service: PaymentService = Depends(get_scoped_payment_service),
 ):
     return await service.get_payment_analytics_by_direction(
         business_id=business_id, user_id=current_user.id,
@@ -126,7 +148,7 @@ async def get_payment_analytics_by_method(
     direction: Optional[PaymentDirection] = Query(None),
     payment_method: Optional[PaymentMethod] = Query(None),
     current_user: UserResponse = Depends(get_current_user),
-    service: PaymentService = Depends(get_payment_service),
+    service: PaymentService = Depends(get_scoped_payment_service),
 ):
     return await service.get_payment_analytics_by_method(
         business_id=business_id, user_id=current_user.id,

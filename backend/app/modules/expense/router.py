@@ -1,8 +1,11 @@
 from fastapi import APIRouter, Depends, Path, Query, status
 from typing import Optional
 from datetime import datetime
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.core.database import get_db_session
+from app.core.container import RepositoryContainer
 from app.modules.authentication.router import get_current_user
 from app.modules.authentication.schemas import UserResponse
 from app.modules.expense.schemas import (
@@ -23,6 +26,7 @@ from app.modules.expense.service import (
     ExpenseService,
     expense_service,
 )
+from app.modules.business_membership.service import BusinessMembershipService
 
 router = APIRouter(
     prefix=settings.api_v1_prefix + "/businesses/{business_id}",
@@ -34,6 +38,24 @@ def get_expense_service() -> ExpenseService:
     return expense_service
 
 
+async def get_scoped_expense_service(session: AsyncSession = Depends(get_db_session)) -> ExpenseService:
+    """
+    Request-scoped ExpenseService wired to the same AsyncSession for transaction boundary.
+    """
+    container = RepositoryContainer(session)
+    membership_svc = BusinessMembershipService(
+        repository=container.business_membership,
+        user_repo=container.user,
+        account_repo=container.account,
+        business_repo=container.business,
+    )
+    return ExpenseService(
+        expense_repo=container.expense,
+        membership_service=membership_svc,
+        session=session,
+    )
+
+
 # --- Expense Categories ---
 
 @router.post("/expense-categories", response_model=ExpenseCategoryResponse, status_code=status.HTTP_201_CREATED)
@@ -41,7 +63,7 @@ async def create_category(
     payload: ExpenseCategoryCreate,
     business_id: str = Path(...),
     current_user: UserResponse = Depends(get_current_user),
-    service: ExpenseService = Depends(get_expense_service),
+    service: ExpenseService = Depends(get_scoped_expense_service),
 ):
     return await service.create_category(business_id, current_user.id, payload)
 
@@ -54,7 +76,7 @@ async def list_categories(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     current_user: UserResponse = Depends(get_current_user),
-    service: ExpenseService = Depends(get_expense_service),
+    service: ExpenseService = Depends(get_scoped_expense_service),
 ):
     return await service.list_categories(
         business_id=business_id,
@@ -72,7 +94,7 @@ async def update_category(
     business_id: str = Path(...),
     category_id: str = Path(...),
     current_user: UserResponse = Depends(get_current_user),
-    service: ExpenseService = Depends(get_expense_service),
+    service: ExpenseService = Depends(get_scoped_expense_service),
 ):
     return await service.update_category(business_id, category_id, current_user.id, payload)
 
@@ -82,7 +104,7 @@ async def archive_category(
     business_id: str = Path(...),
     category_id: str = Path(...),
     current_user: UserResponse = Depends(get_current_user),
-    service: ExpenseService = Depends(get_expense_service),
+    service: ExpenseService = Depends(get_scoped_expense_service),
 ):
     return await service.archive_category(business_id, category_id, current_user.id)
 
@@ -94,7 +116,7 @@ async def create_expense(
     payload: ExpenseCreate,
     business_id: str = Path(...),
     current_user: UserResponse = Depends(get_current_user),
-    service: ExpenseService = Depends(get_expense_service),
+    service: ExpenseService = Depends(get_scoped_expense_service),
 ):
     return await service.create_expense(business_id, current_user.id, payload)
 
@@ -112,7 +134,7 @@ async def list_expenses(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     current_user: UserResponse = Depends(get_current_user),
-    service: ExpenseService = Depends(get_expense_service),
+    service: ExpenseService = Depends(get_scoped_expense_service),
 ):
     return await service.list_expenses(
         business_id=business_id,
@@ -136,7 +158,7 @@ async def get_expense_summary(
     date_to: Optional[datetime] = Query(None),
     category_id: Optional[str] = Query(None),
     current_user: UserResponse = Depends(get_current_user),
-    service: ExpenseService = Depends(get_expense_service),
+    service: ExpenseService = Depends(get_scoped_expense_service),
 ):
     return await service.get_summary(
         business_id=business_id,
@@ -154,7 +176,7 @@ async def get_expense_analytics_by_category(
     date_to: datetime = Query(...),
     category_id: Optional[str] = Query(None),
     current_user: UserResponse = Depends(get_current_user),
-    service: ExpenseService = Depends(get_expense_service),
+    service: ExpenseService = Depends(get_scoped_expense_service),
 ):
     return await service.get_analytics_by_category(
         business_id=business_id,
@@ -170,7 +192,7 @@ async def get_expense(
     business_id: str = Path(...),
     expense_id: str = Path(...),
     current_user: UserResponse = Depends(get_current_user),
-    service: ExpenseService = Depends(get_expense_service),
+    service: ExpenseService = Depends(get_scoped_expense_service),
 ):
     return await service.get_expense(business_id, expense_id, current_user.id)
 
@@ -181,7 +203,7 @@ async def update_expense(
     business_id: str = Path(...),
     expense_id: str = Path(...),
     current_user: UserResponse = Depends(get_current_user),
-    service: ExpenseService = Depends(get_expense_service),
+    service: ExpenseService = Depends(get_scoped_expense_service),
 ):
     return await service.update_expense(business_id, expense_id, current_user.id, payload)
 
@@ -191,7 +213,7 @@ async def finalize_expense(
     business_id: str = Path(...),
     expense_id: str = Path(...),
     current_user: UserResponse = Depends(get_current_user),
-    service: ExpenseService = Depends(get_expense_service),
+    service: ExpenseService = Depends(get_scoped_expense_service),
 ):
     return await service.finalize_expense(business_id, expense_id, current_user.id)
 
@@ -201,6 +223,6 @@ async def cancel_expense(
     business_id: str = Path(...),
     expense_id: str = Path(...),
     current_user: UserResponse = Depends(get_current_user),
-    service: ExpenseService = Depends(get_expense_service),
+    service: ExpenseService = Depends(get_scoped_expense_service),
 ):
     return await service.cancel_expense(business_id, expense_id, current_user.id)

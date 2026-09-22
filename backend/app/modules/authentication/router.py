@@ -1,7 +1,9 @@
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.database import get_db_session
 from app.modules.authentication.service import auth_service, AuthenticationService
 from app.modules.authentication.schemas import (
     UserCreate,
@@ -17,8 +19,11 @@ router = APIRouter(prefix=settings.api_v1_prefix + "/auth", tags=["Authenticatio
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl=settings.api_v1_prefix + "/auth/login")
 
 
-def get_auth_service() -> AuthenticationService:
-    return auth_service
+async def get_auth_service(session: AsyncSession = Depends(get_db_session)) -> AuthenticationService:
+    """Request-scoped AuthenticationService backed by PostgreSQL via SQLAlchemyUserRepository."""
+    from app.core.container import RepositoryContainer
+    container = RepositoryContainer(session)
+    return AuthenticationService(repository=container.user)
 
 
 # Dependency to get the current authenticated user from the token
