@@ -33,7 +33,6 @@ from app.modules.accounting.schemas import (
 )
 from app.modules.accounting.service import (
     AccountingService,
-    accounting_service,
 )
 
 
@@ -41,10 +40,6 @@ router = APIRouter(
     prefix=settings.api_v1_prefix + "/businesses/{business_id}/accounting",
     tags=["Accounting Foundation"],
 )
-
-
-def get_accounting_service() -> AccountingService:
-    return accounting_service
 
 
 async def get_scoped_accounting_service(session: AsyncSession = Depends(get_db_session)) -> AccountingService:
@@ -73,7 +68,7 @@ async def list_accounts(
     business_id: str = Path(...),
     account_type: Optional[AccountType] = Query(None),
     current_user: UserResponse = Depends(get_current_user),
-    service: AccountingService = Depends(get_accounting_service),
+    service: AccountingService = Depends(get_scoped_accounting_service),
 ):
     return await service.list_accounts(business_id=business_id, user_id=current_user.id, account_type=account_type)
 
@@ -83,7 +78,7 @@ async def create_account(
     payload: AccountCreate,
     business_id: str = Path(...),
     current_user: UserResponse = Depends(get_current_user),
-    service: AccountingService = Depends(get_accounting_service),
+    service: AccountingService = Depends(get_scoped_accounting_service),
 ):
     return await service.create_account(business_id=business_id, user_id=current_user.id, payload=payload)
 
@@ -93,7 +88,7 @@ async def get_account(
     business_id: str = Path(...),
     account_id: str = Path(...),
     current_user: UserResponse = Depends(get_current_user),
-    service: AccountingService = Depends(get_accounting_service),
+    service: AccountingService = Depends(get_scoped_accounting_service),
 ):
     return await service.get_account(business_id=business_id, account_id=account_id, user_id=current_user.id)
 
@@ -104,7 +99,7 @@ async def update_account(
     business_id: str = Path(...),
     account_id: str = Path(...),
     current_user: UserResponse = Depends(get_current_user),
-    service: AccountingService = Depends(get_accounting_service),
+    service: AccountingService = Depends(get_scoped_accounting_service),
 ):
     return await service.update_account(business_id=business_id, account_id=account_id, user_id=current_user.id, payload=payload)
 
@@ -114,7 +109,7 @@ async def archive_account(
     business_id: str = Path(...),
     account_id: str = Path(...),
     current_user: UserResponse = Depends(get_current_user),
-    service: AccountingService = Depends(get_accounting_service),
+    service: AccountingService = Depends(get_scoped_accounting_service),
 ):
     return await service.archive_account(business_id=business_id, account_id=account_id, user_id=current_user.id)
 
@@ -131,7 +126,7 @@ async def list_journals(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     current_user: UserResponse = Depends(get_current_user),
-    service: AccountingService = Depends(get_accounting_service),
+    service: AccountingService = Depends(get_scoped_accounting_service),
 ):
     return await service.list_journals(
         business_id=business_id,
@@ -160,7 +155,7 @@ async def get_journal(
     business_id: str = Path(...),
     journal_id: str = Path(...),
     current_user: UserResponse = Depends(get_current_user),
-    service: AccountingService = Depends(get_accounting_service),
+    service: AccountingService = Depends(get_scoped_accounting_service),
 ):
     return await service.get_journal(business_id=business_id, journal_id=journal_id, user_id=current_user.id)
 
@@ -170,7 +165,7 @@ async def void_journal(
     business_id: str = Path(...),
     journal_id: str = Path(...),
     current_user: UserResponse = Depends(get_current_user),
-    service: AccountingService = Depends(get_accounting_service),
+    service: AccountingService = Depends(get_scoped_accounting_service),
 ):
     return await service.void_journal(business_id=business_id, journal_id=journal_id, user_id=current_user.id)
 
@@ -185,7 +180,7 @@ async def get_general_ledger(
     date_from: Optional[datetime] = Query(None),
     date_to: Optional[datetime] = Query(None),
     current_user: UserResponse = Depends(get_current_user),
-    service: AccountingService = Depends(get_accounting_service),
+    service: AccountingService = Depends(get_scoped_accounting_service),
 ):
     return await service.get_general_ledger(
         business_id=business_id,
@@ -201,7 +196,7 @@ async def get_general_ledger(
 async def get_trial_balance(
     business_id: str = Path(...),
     current_user: UserResponse = Depends(get_current_user),
-    service: AccountingService = Depends(get_accounting_service),
+    service: AccountingService = Depends(get_scoped_accounting_service),
 ):
     return await service.get_trial_balance(business_id=business_id, user_id=current_user.id)
 
@@ -212,7 +207,7 @@ async def get_trial_balance(
 async def list_periods(
     business_id: str = Path(...),
     current_user: UserResponse = Depends(get_current_user),
-    service: AccountingService = Depends(get_accounting_service),
+    service: AccountingService = Depends(get_scoped_accounting_service),
 ):
     return await service.list_periods(business_id=business_id, user_id=current_user.id)
 
@@ -222,7 +217,7 @@ async def create_period(
     payload: AccountingPeriodCreate,
     business_id: str = Path(...),
     current_user: UserResponse = Depends(get_current_user),
-    service: AccountingService = Depends(get_accounting_service),
+    service: AccountingService = Depends(get_scoped_accounting_service),
 ):
     return await service.create_period(business_id=business_id, user_id=current_user.id, payload=payload)
 
@@ -232,7 +227,7 @@ async def get_period(
     business_id: str = Path(...),
     period_id: str = Path(...),
     current_user: UserResponse = Depends(get_current_user),
-    service: AccountingService = Depends(get_accounting_service),
+    service: AccountingService = Depends(get_scoped_accounting_service),
 ):
     return await service.get_period(business_id=business_id, period_id=period_id, user_id=current_user.id)
 
@@ -242,7 +237,7 @@ async def close_period(
     business_id: str = Path(...),
     period_id: str = Path(...),
     current_user: UserResponse = Depends(get_current_user),
-    service: AccountingService = Depends(get_accounting_service),
+    service: AccountingService = Depends(get_scoped_accounting_service),
 ):
     return await service.close_period_by_id(business_id=business_id, period_id=period_id, user_id=current_user.id)
 
@@ -254,7 +249,7 @@ async def get_profit_and_loss(
     business_id: str = Path(...),
     period_id: str = Query(...),
     current_user: UserResponse = Depends(get_current_user),
-    service: AccountingService = Depends(get_accounting_service),
+    service: AccountingService = Depends(get_scoped_accounting_service),
 ):
     return await service.get_profit_and_loss(business_id=business_id, period_id=period_id, user_id=current_user.id)
 
@@ -264,7 +259,7 @@ async def get_balance_sheet(
     business_id: str = Path(...),
     period_id: str = Query(...),
     current_user: UserResponse = Depends(get_current_user),
-    service: AccountingService = Depends(get_accounting_service),
+    service: AccountingService = Depends(get_scoped_accounting_service),
 ):
     return await service.get_balance_sheet(business_id=business_id, period_id=period_id, user_id=current_user.id)
 
@@ -275,7 +270,7 @@ async def get_balance_sheet(
 async def get_tax_config(
     business_id: str = Path(...),
     current_user: UserResponse = Depends(get_current_user),
-    service: AccountingService = Depends(get_accounting_service),
+    service: AccountingService = Depends(get_scoped_accounting_service),
 ):
     return await service.get_tax_config(business_id=business_id, user_id=current_user.id)
 
@@ -285,7 +280,7 @@ async def update_tax_config(
     payload: TaxConfigurationUpdate,
     business_id: str = Path(...),
     current_user: UserResponse = Depends(get_current_user),
-    service: AccountingService = Depends(get_accounting_service),
+    service: AccountingService = Depends(get_scoped_accounting_service),
 ):
     return await service.update_tax_config(business_id=business_id, user_id=current_user.id, payload=payload)
 
@@ -298,7 +293,7 @@ async def get_tax_summary(
     year: int = Query(..., ge=2020, le=2099),
     month: int = Query(..., ge=1, le=12),
     current_user: UserResponse = Depends(get_current_user),
-    service: AccountingService = Depends(get_accounting_service),
+    service: AccountingService = Depends(get_scoped_accounting_service),
 ):
     return await service.get_tax_summary(business_id=business_id, user_id=current_user.id, year=year, month=month)
 
@@ -312,7 +307,7 @@ async def get_cash_flow_statement(
     date_from: Optional[date] = Query(None),
     date_to: Optional[date] = Query(None),
     current_user: UserResponse = Depends(get_current_user),
-    service: AccountingService = Depends(get_accounting_service),
+    service: AccountingService = Depends(get_scoped_accounting_service),
 ):
     return await service.get_cash_flow_statement(
         business_id=business_id,
