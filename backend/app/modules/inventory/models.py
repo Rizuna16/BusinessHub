@@ -12,6 +12,10 @@ from app.core.database import Base
 class StockBalance(Base):
     __tablename__ = "stock_balances"
 
+    # Note: Unique constraints for (business_id, inventory_location_id, product_id, variant_id)
+    # with nullable variant_id are enforced via PostgreSQL partial unique indexes
+    # created in alembic migration c3d4e5f6a7b8.
+
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     business_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
     inventory_location_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
@@ -51,6 +55,10 @@ class StockMovementLine(Base):
 
 class InventoryCostState(Base):
     __tablename__ = "inventory_cost_states"
+
+    # Note: Unique constraints for (business_id, product_id, variant_id)
+    # with nullable variant_id are enforced via PostgreSQL partial unique indexes
+    # created in alembic migration c3d4e5f6a7b8.
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     business_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)

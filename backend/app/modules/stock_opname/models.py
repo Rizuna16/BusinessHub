@@ -35,5 +35,6 @@ class StockOpnameLineInDB(Base):
     system_quantity: Mapped[Decimal] = mapped_column(Numeric(18, 4))
     counted_quantity: Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 4), nullable=True)
     variance: Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 4), nullable=True)
+    batch_adjustments: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

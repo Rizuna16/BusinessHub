@@ -34,6 +34,7 @@ from app.modules.warehouse.schemas import InventoryLocationStatus
 from app.modules.accounting.integration import accounting_integration_service
 from app.modules.inventory.service import inventory_service
 from app.modules.inventory.schemas import InventoryCostMovementType
+from app.modules.inventory_batch.service import inventory_batch_service
 
 
 class PurchaseReturnService:
@@ -138,8 +139,23 @@ class PurchaseReturnService:
     ) -> PurchaseReturnResponse:
         if self.session is not None:
             async with self.session.begin():
-                return await self._create_return_impl(business_id, user_id, payload)
-        return await self._create_return_impl(business_id, user_id, payload)
+                return await self._create_return_with_retry(business_id, user_id, payload)
+        return await self._create_return_with_retry(business_id, user_id, payload)
+
+    async def _create_return_with_retry(self, business_id: str, user_id: str, payload: PurchaseReturnCreate) -> PurchaseReturnResponse:
+        for attempt in range(3):
+            try:
+                if self.session is not None:
+                    async with self.session.begin_nested():
+                        return await self._create_return_impl(business_id, user_id, payload)
+                else:
+                    return await self._create_return_impl(business_id, user_id, payload)
+            except Exception as e:
+                err_str = str(e).lower()
+                if ("unique" in err_str and ("return_number" in err_str or "uq_purchase_return" in err_str)) and attempt < 2:
+                    continue
+                raise
+        raise HTTPException(status_code=409, detail="Document number collision; please retry")
 
     async def _create_return_impl(
         self, business_id: str, user_id: str, payload: PurchaseReturnCreate
@@ -664,6 +680,28 @@ class PurchaseReturnService:
                     movement_type=InventoryCostMovementType.PURCHASE_RETURN_OUT,
                     reference_type="PURCHASE_RETURN",
                     reference_id=return_id,
+                )
+
+            # Batch outbound for each return line
+            for line in lines:
+                purchase_line = await self.purchase_repo.get_line_by_id(line.purchase_line_id, r.purchase_id)
+                if not purchase_line:
+                    continue
+                await inventory_batch_service.record_batch_outbound(
+                    business_id=business_id,
+                    inventory_location_id=r.inventory_location_id,
+                    product_id=line.product_id,
+                    variant_id=line.variant_id,
+                    batch_id=f"PRT:{return_id}:{line.id}",
+                    quantity=line.quantity,
+                    stock_movement_id=f"PRT:{return_id}:{line.id}",
+                )
+            for line in lines:
+                purchase_line = await self.purchase_repo.get_line_by_id(line.purchase_line_id, r.purchase_id)
+                if not purchase_line:
+                    continue
+                await inventory_batch_service.validate_batch_aggregate_invariant(
+                    business_id, r.inventory_location_id, line.product_id, line.variant_id,
                 )
         finally:
             _inventory_lock.release()

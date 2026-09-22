@@ -1,5 +1,5 @@
 from enum import Enum
-from datetime import datetime
+from datetime import datetime, date
 from typing import Optional, List, Any
 from decimal import Decimal
 from pydantic import BaseModel, Field, ConfigDict, field_validator
@@ -54,6 +54,7 @@ class DeliveryNoteLineInDB(BaseModel):
     delivery_quantity: Decimal
     unit: Optional[str] = None
     notes: Optional[str] = None
+    batch_allocations: Optional[List[dict]] = None
     created_at: datetime
     updated_at: datetime
 

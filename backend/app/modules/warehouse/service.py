@@ -128,6 +128,10 @@ class WarehouseService:
                 detail=f"A warehouse with code '{payload.code}' already exists in this business.",
             )
 
+        # Feature #63: quota enforcement
+        from app.modules.subscription.service import SubscriptionService
+        await SubscriptionService().check_quota(business_id, "max_warehouses")
+
         active_count = await self.warehouse_repo.count_active(business_id)
         is_default = (active_count == 0)
 

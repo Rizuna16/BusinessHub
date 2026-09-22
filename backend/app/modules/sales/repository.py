@@ -30,6 +30,10 @@ class AbstractSalesRepository(ABC):
         pass
 
     @abstractmethod
+    async def get_sales_for_update(self, sales_id: str, business_id: str) -> Optional[SalesInDB]:
+        pass
+
+    @abstractmethod
     async def get_sales_by_number(self, business_id: str, sales_number: str) -> Optional[SalesInDB]:
         pass
 
@@ -87,6 +91,8 @@ class AbstractSalesRepository(ABC):
         tax_amount: Decimal,
         line_subtotal: Decimal,
         line_total: Decimal,
+        discount_rule_id: Optional[str] = None,
+        discount_rule_name_snapshot: Optional[str] = None,
     ) -> SalesLineInDB:
         pass
 
@@ -112,6 +118,8 @@ class AbstractSalesRepository(ABC):
         tax_amount: Optional[Decimal] = None,
         line_subtotal: Optional[Decimal] = None,
         line_total: Optional[Decimal] = None,
+        discount_rule_id: Optional[str] = None,
+        discount_rule_name_snapshot: Optional[str] = None,
     ) -> Optional[SalesLineInDB]:
         pass
 
@@ -191,6 +199,9 @@ class InMemorySalesRepository(AbstractSalesRepository):
         if not s or s.business_id != business_id or s.is_deleted:
             return None
         return s
+
+    async def get_sales_for_update(self, sales_id: str, business_id: str) -> Optional[SalesInDB]:
+        return await self.get_sales_by_id(sales_id, business_id)
 
     async def get_sales_by_number(self, business_id: str, sales_number: str) -> Optional[SalesInDB]:
         for s in self._sales.values():
@@ -308,6 +319,8 @@ class InMemorySalesRepository(AbstractSalesRepository):
         tax_amount: Decimal,
         line_subtotal: Decimal,
         line_total: Decimal,
+        discount_rule_id: Optional[str] = None,
+        discount_rule_name_snapshot: Optional[str] = None,
     ) -> SalesLineInDB:
         line_id = str(uuid.uuid4())
         now = datetime.now(timezone.utc)
@@ -320,6 +333,8 @@ class InMemorySalesRepository(AbstractSalesRepository):
             quantity=quantity,
             unit_price=unit_price,
             discount_amount=discount_amount,
+            discount_rule_id=discount_rule_id,
+            discount_rule_name_snapshot=discount_rule_name_snapshot,
             tax_amount=tax_amount,
             line_subtotal=line_subtotal,
             line_total=line_total,
@@ -353,6 +368,8 @@ class InMemorySalesRepository(AbstractSalesRepository):
         tax_amount: Optional[Decimal] = None,
         line_subtotal: Optional[Decimal] = None,
         line_total: Optional[Decimal] = None,
+        discount_rule_id: Optional[str] = None,
+        discount_rule_name_snapshot: Optional[str] = None,
     ) -> Optional[SalesLineInDB]:
         l = await self.get_line_by_id(line_id, sales_id)
         if not l:
@@ -377,6 +394,10 @@ class InMemorySalesRepository(AbstractSalesRepository):
             data["line_subtotal"] = line_subtotal
         if line_total is not None:
             data["line_total"] = line_total
+        if discount_rule_id is not None:
+            data["discount_rule_id"] = discount_rule_id
+        if discount_rule_name_snapshot is not None:
+            data["discount_rule_name_snapshot"] = discount_rule_name_snapshot
         data["updated_at"] = datetime.now(timezone.utc)
 
         updated = SalesLineInDB(**data)

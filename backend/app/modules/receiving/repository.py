@@ -70,6 +70,7 @@ class AbstractReceivingRepository(ABC):
         product_id: str,
         variant_id: Optional[str],
         quantity: Decimal,
+        batch_allocations: Optional[List[dict]] = None,
     ) -> ReceivingLineInDB:
         pass
 
@@ -242,6 +243,7 @@ class InMemoryReceivingRepository(AbstractReceivingRepository):
         product_id: str,
         variant_id: Optional[str],
         quantity: Decimal,
+        batch_allocations: Optional[List[dict]] = None,
     ) -> ReceivingLineInDB:
         line_id = str(uuid.uuid4())
         now = datetime.now(timezone.utc)
@@ -252,6 +254,7 @@ class InMemoryReceivingRepository(AbstractReceivingRepository):
             product_id=product_id,
             variant_id=variant_id,
             quantity=quantity,
+            batch_allocations=batch_allocations,
             created_at=now,
             updated_at=now,
         )

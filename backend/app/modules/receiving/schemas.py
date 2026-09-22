@@ -1,5 +1,5 @@
 from enum import Enum
-from datetime import datetime
+from datetime import datetime, date
 from typing import Optional, List
 from decimal import Decimal
 from pydantic import BaseModel, Field, ConfigDict, field_validator
@@ -11,9 +11,33 @@ class ReceivingStatus(str, Enum):
     CANCELLED = "CANCELLED"
 
 
+class BatchAllocationReceivingInput(BaseModel):
+    batch_number: str = Field(..., min_length=1, max_length=100)
+    quantity: Decimal = Field(..., gt=0, decimal_places=4)
+    manufacture_date: Optional[date] = None
+    expiry_date: Optional[date] = None
+
+    @field_validator("batch_number")
+    @classmethod
+    def validate_batch_number(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("Batch number cannot be empty")
+        return v.strip()
+
+    @field_validator("expiry_date", "manufacture_date", mode="before")
+    @classmethod
+    def parse_date(cls, v):
+        if isinstance(v, str):
+            return date.fromisoformat(v)
+        return v
+
+    model_config = ConfigDict(extra="forbid")
+
+
 class ReceivingLineCreate(BaseModel):
     purchase_line_id: str = Field(..., min_length=1)
     quantity: Decimal = Field(..., gt=0)
+    batch_allocations: Optional[List[BatchAllocationReceivingInput]] = None
 
     model_config = ConfigDict(extra="forbid")
 
@@ -45,6 +69,7 @@ class ReceivingLineInDB(BaseModel):
     product_id: str
     variant_id: Optional[str] = None
     quantity: Decimal
+    batch_allocations: Optional[List[dict]] = None
     created_at: datetime
     updated_at: datetime
 

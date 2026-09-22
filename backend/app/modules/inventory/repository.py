@@ -29,6 +29,15 @@ class AbstractStockBalanceRepository(ABC):
     ) -> Optional[StockBalanceInDB]:
         pass
 
+    async def get_balance_for_update(
+        self,
+        business_id: str,
+        inventory_location_id: str,
+        product_id: str,
+        variant_id: Optional[str] = None,
+    ) -> Optional[StockBalanceInDB]:
+        return await self.get_balance(business_id, inventory_location_id, product_id, variant_id)
+
     @abstractmethod
     async def get_by_id(self, stock_id: str, business_id: str) -> Optional[StockBalanceInDB]:
         pass

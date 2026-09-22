@@ -77,6 +77,7 @@ class SalesReturnLineInDB(BaseModel):
     line_total: Decimal
     delivery_note_id: Optional[str] = None
     delivery_note_line_id: Optional[str] = None
+    batch_allocations: Optional[List[dict]] = None
     created_at: datetime
     updated_at: datetime
 

@@ -41,6 +41,7 @@ class StockOpnameLineInDB(BaseModel):
     system_quantity: Decimal
     counted_quantity: Optional[Decimal] = None
     variance: Optional[Decimal] = None
+    batch_adjustments: Optional[List[dict]] = None
     created_at: datetime
     updated_at: datetime
 

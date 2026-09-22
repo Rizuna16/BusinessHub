@@ -33,6 +33,12 @@ class AbstractSalesReturnRepository(ABC):
         pass
 
     @abstractmethod
+    async def get_sales_return_for_update(
+        self, return_id: str, business_id: str
+    ) -> Optional[SalesReturnInDB]:
+        pass
+
+    @abstractmethod
     async def get_next_return_sequence(self, business_id: str) -> int:
         pass
 
@@ -185,6 +191,14 @@ class InMemorySalesReturnRepository(AbstractSalesReturnRepository):
         return ret
 
     async def get_return_by_id(
+        self, return_id: str, business_id: str
+    ) -> Optional[SalesReturnInDB]:
+        r = self._returns.get(return_id)
+        if not r or r.business_id != business_id:
+            return None
+        return r
+
+    async def get_sales_return_for_update(
         self, return_id: str, business_id: str
     ) -> Optional[SalesReturnInDB]:
         r = self._returns.get(return_id)

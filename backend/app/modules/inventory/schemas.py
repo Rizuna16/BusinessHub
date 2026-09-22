@@ -31,6 +31,7 @@ class ReferenceType(str, Enum):
     STOCK_OPNAME = "STOCK_OPNAME"
     SALES = "SALES"
     SALES_RETURN = "SALES_RETURN"
+    RECEIVING = "RECEIVING"
 
 
 class StockBalanceBase(BaseModel):
@@ -271,6 +272,7 @@ class InventoryCostMovementType(str, Enum):
     OPNAME_SYNC = "OPNAME_SYNC"
     TRANSFER_OUT = "TRANSFER_OUT"
     TRANSFER_IN = "TRANSFER_IN"
+    PURCHASE_RECEIVING = "PURCHASE_RECEIVING"
 
 
 class InventoryCostMovementInDB(BaseModel):

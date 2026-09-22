@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 import threading
 from uuid import uuid4
 from fastapi import HTTPException, status
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.delivery_note.schemas import (
     DeliveryNoteInDB,
@@ -53,6 +54,7 @@ from app.modules.inventory.repository import (
     stock_movement_repository,
     inventory_cost_repository,
 )
+from app.modules.inventory_batch.service import inventory_batch_service
 
 
 DELIVERY_NOTE_NOT_FOUND = "DELIVERY_NOTE_NOT_FOUND"
@@ -104,10 +106,12 @@ class DeliveryNoteService:
         delivery_note_repo: AbstractDeliveryNoteRepository = delivery_note_repository,
         sales_order_repo: AbstractSalesOrderRepository = sales_order_repository,
         membership_service: BusinessMembershipService = business_membership_service,
+        session: Optional[AsyncSession] = None,
     ):
         self.delivery_note_repo = delivery_note_repo
         self.sales_order_repo = sales_order_repo
         self.membership_service = membership_service
+        self.session = session
 
     async def _validate_access(
         self,
@@ -188,6 +192,27 @@ class DeliveryNoteService:
         return DeliveryNoteResponse(**dn.model_dump(), lines=lines)
 
     async def create_delivery_note(self, business_id: str, user_id: str, payload: DeliveryNoteCreate) -> DeliveryNoteResponse:
+        if self.session is not None:
+            async with self.session.begin():
+                return await self._create_delivery_note_with_retry(business_id, user_id, payload)
+        return await self._create_delivery_note_with_retry(business_id, user_id, payload)
+
+    async def _create_delivery_note_with_retry(self, business_id: str, user_id: str, payload: DeliveryNoteCreate) -> DeliveryNoteResponse:
+        for attempt in range(3):
+            try:
+                if self.session is not None:
+                    async with self.session.begin_nested():
+                        return await self._create_delivery_note_impl(business_id, user_id, payload)
+                else:
+                    return await self._create_delivery_note_impl(business_id, user_id, payload)
+            except Exception as e:
+                err_str = str(e).lower()
+                if ("unique" in err_str and ("delivery_number" in err_str or "uq_delivery" in err_str)) and attempt < 2:
+                    continue
+                raise
+        raise HTTPException(status_code=409, detail="Document number collision; please retry")
+
+    async def _create_delivery_note_impl(self, business_id: str, user_id: str, payload: DeliveryNoteCreate) -> DeliveryNoteResponse:
         await self._validate_access(business_id, user_id, required_roles=(BusinessMembershipRole.OWNER, BusinessMembershipRole.ADMIN))
 
         so = await self._validate_sales_order(business_id, payload.sales_order_id)
@@ -510,6 +535,13 @@ class DeliveryNoteService:
         return await self._build_response(business_id, updated)
 
     async def deliver_delivery_note(self, business_id: str, delivery_note_id: str, user_id: str) -> DeliveryNoteResponse:
+        if self.session is not None:
+            async with self.session.begin():
+                return await self._deliver_delivery_note_impl(business_id, delivery_note_id, user_id)
+        else:
+            return await self._deliver_delivery_note_impl(business_id, delivery_note_id, user_id)
+
+    async def _deliver_delivery_note_impl(self, business_id: str, delivery_note_id: str, user_id: str) -> DeliveryNoteResponse:
         await self._validate_access(business_id, user_id, required_roles=(BusinessMembershipRole.OWNER, BusinessMembershipRole.ADMIN))
         
         _inventory_lock.acquire()
@@ -598,8 +630,27 @@ class DeliveryNoteService:
                                 reference_id=delivery_note_id,
                             )
 
-                # 4. Update Sales Order Line Fulfillment & Reservations
-                active_reservations = await reservation_repository.list_by_order(dn.sales_order_id)
+                    # 4. Batch allocation via FEFO for GOODS lines
+                    if goods_lines_for_deduction:
+                        resolved_location_id = await inventory_service._resolve_sale_location(
+                            business_id, None, dn.branch_id,
+                        )
+                        for gl in goods_lines_for_deduction:
+                            await inventory_batch_service.allocate_fefo_outbound(
+                                business_id=business_id,
+                                inventory_location_id=resolved_location_id,
+                                product_id=gl["product_id"],
+                                variant_id=gl.get("variant_id"),
+                                total_quantity=gl["quantity"],
+                                stock_movement_id=f"DN:{delivery_note_id}:{gl.get('sales_line_id', '')}",
+                            )
+                        for gl in goods_lines_for_deduction:
+                            await inventory_batch_service.validate_batch_aggregate_invariant(
+                                business_id, resolved_location_id, gl["product_id"], gl.get("variant_id"),
+                            )
+
+                    # 5. Update Sales Order Line Fulfillment & Reservations
+                active_reservations = await reservation_repository.list_by_order_for_update(dn.sales_order_id)
                 active_res_map = {r.sales_order_line_id: r for r in active_reservations if r.status == ReservationStatus.ACTIVE}
 
                 for line in lines:

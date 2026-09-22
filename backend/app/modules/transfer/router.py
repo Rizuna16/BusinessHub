@@ -1,10 +1,14 @@
 from fastapi import APIRouter, Depends, Path, Query, status
 from typing import Optional
 from decimal import Decimal
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.core.database import get_db_session
+from app.core.container import RepositoryContainer
 from app.modules.authentication.router import get_current_user
 from app.modules.authentication.schemas import UserResponse
+from app.modules.business_membership.service import BusinessMembershipService
 from app.modules.transfer.schemas import (
     TransferResponse,
     TransferListResponse,
@@ -28,12 +32,27 @@ def get_transfer_service() -> TransferService:
     return transfer_service
 
 
+async def get_scoped_transfer_service(session: AsyncSession = Depends(get_db_session)) -> TransferService:
+    container = RepositoryContainer(session)
+    membership_svc = BusinessMembershipService(
+        repository=container.business_membership,
+        user_repo=container.user,
+        account_repo=container.account,
+        business_repo=container.business,
+    )
+    return TransferService(
+        transfer_repo=container.transfer,
+        membership_service=membership_svc,
+        session=session,
+    )
+
+
 @router.post("", response_model=TransferResponse, status_code=status.HTTP_201_CREATED)
 async def create_transfer_order(
     payload: TransferCreate,
     business_id: str = Path(...),
     current_user: UserResponse = Depends(get_current_user),
-    service: TransferService = Depends(get_transfer_service),
+    service: TransferService = Depends(get_scoped_transfer_service),
 ):
     return await service.create_transfer(business_id, current_user.id, payload)
 
@@ -48,7 +67,7 @@ async def list_transfer_orders(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     current_user: UserResponse = Depends(get_current_user),
-    service: TransferService = Depends(get_transfer_service),
+    service: TransferService = Depends(get_scoped_transfer_service),
 ):
     return await service.list_transfers(
         business_id=business_id,
@@ -67,7 +86,7 @@ async def get_transfer_order(
     business_id: str = Path(...),
     transfer_id: str = Path(...),
     current_user: UserResponse = Depends(get_current_user),
-    service: TransferService = Depends(get_transfer_service),
+    service: TransferService = Depends(get_scoped_transfer_service),
 ):
     return await service.get_transfer(business_id, transfer_id, current_user.id)
 
@@ -78,7 +97,7 @@ async def add_transfer_line(
     business_id: str = Path(...),
     transfer_id: str = Path(...),
     current_user: UserResponse = Depends(get_current_user),
-    service: TransferService = Depends(get_transfer_service),
+    service: TransferService = Depends(get_scoped_transfer_service),
 ):
     return await service.add_line(business_id, transfer_id, current_user.id, payload)
 
@@ -90,7 +109,7 @@ async def update_transfer_line(
     line_id: str = Path(...),
     quantity: Decimal = Query(..., gt=0),
     current_user: UserResponse = Depends(get_current_user),
-    service: TransferService = Depends(get_transfer_service),
+    service: TransferService = Depends(get_scoped_transfer_service),
 ):
     return await service.update_line(business_id, transfer_id, line_id, current_user.id, quantity)
 
@@ -101,7 +120,7 @@ async def delete_transfer_line(
     transfer_id: str = Path(...),
     line_id: str = Path(...),
     current_user: UserResponse = Depends(get_current_user),
-    service: TransferService = Depends(get_transfer_service),
+    service: TransferService = Depends(get_scoped_transfer_service),
 ):
     return await service.delete_line(business_id, transfer_id, line_id, current_user.id)
 
@@ -111,7 +130,7 @@ async def dispatch_transfer_order(
     business_id: str = Path(...),
     transfer_id: str = Path(...),
     current_user: UserResponse = Depends(get_current_user),
-    service: TransferService = Depends(get_transfer_service),
+    service: TransferService = Depends(get_scoped_transfer_service),
 ):
     return await service.dispatch_transfer(business_id, transfer_id, current_user.id)
 
@@ -121,7 +140,7 @@ async def receive_transfer_order(
     business_id: str = Path(...),
     transfer_id: str = Path(...),
     current_user: UserResponse = Depends(get_current_user),
-    service: TransferService = Depends(get_transfer_service),
+    service: TransferService = Depends(get_scoped_transfer_service),
 ):
     return await service.receive_transfer(business_id, transfer_id, current_user.id)
 
@@ -131,6 +150,6 @@ async def cancel_transfer_order(
     business_id: str = Path(...),
     transfer_id: str = Path(...),
     current_user: UserResponse = Depends(get_current_user),
-    service: TransferService = Depends(get_transfer_service),
+    service: TransferService = Depends(get_scoped_transfer_service),
 ):
     return await service.cancel_transfer(business_id, transfer_id, current_user.id)

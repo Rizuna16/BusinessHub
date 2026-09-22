@@ -1,9 +1,13 @@
 from fastapi import APIRouter, Depends, Path, Query, status
 from typing import Optional
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.core.database import get_db_session
+from app.core.container import RepositoryContainer
 from app.modules.authentication.router import get_current_user
 from app.modules.authentication.schemas import UserResponse
+from app.modules.business_membership.service import BusinessMembershipService
 from app.modules.sales_return.schemas import (
     SalesReturnResponse,
     SalesReturnListResponse,
@@ -29,12 +33,27 @@ def get_sales_return_service() -> SalesReturnService:
     return sales_return_service
 
 
+async def get_scoped_sales_return_service(session: AsyncSession = Depends(get_db_session)) -> SalesReturnService:
+    container = RepositoryContainer(session)
+    membership_svc = BusinessMembershipService(
+        repository=container.business_membership,
+        user_repo=container.user,
+        account_repo=container.account,
+        business_repo=container.business,
+    )
+    return SalesReturnService(
+        return_repo=container.sales_return,
+        membership_service=membership_svc,
+        session=session,
+    )
+
+
 @router.post("", response_model=SalesReturnResponse, status_code=status.HTTP_201_CREATED)
 async def create_sales_return(
     payload: SalesReturnCreate,
     business_id: str = Path(...),
     current_user: UserResponse = Depends(get_current_user),
-    service: SalesReturnService = Depends(get_sales_return_service),
+    service: SalesReturnService = Depends(get_scoped_sales_return_service),
 ):
     return await service.create_return(business_id, current_user.id, payload)
 
@@ -49,7 +68,7 @@ async def list_sales_returns(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     current_user: UserResponse = Depends(get_current_user),
-    service: SalesReturnService = Depends(get_sales_return_service),
+    service: SalesReturnService = Depends(get_scoped_sales_return_service),
 ):
     return await service.list_returns(
         business_id=business_id,
@@ -68,7 +87,7 @@ async def get_sales_return(
     business_id: str = Path(...),
     return_id: str = Path(...),
     current_user: UserResponse = Depends(get_current_user),
-    service: SalesReturnService = Depends(get_sales_return_service),
+    service: SalesReturnService = Depends(get_scoped_sales_return_service),
 ):
     return await service.get_return(business_id, return_id, current_user.id)
 
@@ -79,7 +98,7 @@ async def update_sales_return(
     business_id: str = Path(...),
     return_id: str = Path(...),
     current_user: UserResponse = Depends(get_current_user),
-    service: SalesReturnService = Depends(get_sales_return_service),
+    service: SalesReturnService = Depends(get_scoped_sales_return_service),
 ):
     return await service.update_return(business_id, return_id, current_user.id, payload)
 
@@ -90,7 +109,7 @@ async def add_sales_return_line(
     business_id: str = Path(...),
     return_id: str = Path(...),
     current_user: UserResponse = Depends(get_current_user),
-    service: SalesReturnService = Depends(get_sales_return_service),
+    service: SalesReturnService = Depends(get_scoped_sales_return_service),
 ):
     return await service.add_line(business_id, return_id, current_user.id, payload)
 
@@ -102,7 +121,7 @@ async def update_sales_return_line(
     return_id: str = Path(...),
     line_id: str = Path(...),
     current_user: UserResponse = Depends(get_current_user),
-    service: SalesReturnService = Depends(get_sales_return_service),
+    service: SalesReturnService = Depends(get_scoped_sales_return_service),
 ):
     return await service.update_line(business_id, return_id, line_id, current_user.id, payload)
 
@@ -113,7 +132,7 @@ async def delete_sales_return_line(
     return_id: str = Path(...),
     line_id: str = Path(...),
     current_user: UserResponse = Depends(get_current_user),
-    service: SalesReturnService = Depends(get_sales_return_service),
+    service: SalesReturnService = Depends(get_scoped_sales_return_service),
 ):
     return await service.delete_line(business_id, return_id, line_id, current_user.id)
 
@@ -123,7 +142,7 @@ async def finalize_sales_return(
     business_id: str = Path(...),
     return_id: str = Path(...),
     current_user: UserResponse = Depends(get_current_user),
-    service: SalesReturnService = Depends(get_sales_return_service),
+    service: SalesReturnService = Depends(get_scoped_sales_return_service),
 ):
     return await service.finalize_return(business_id, return_id, current_user.id)
 
@@ -133,6 +152,6 @@ async def cancel_sales_return(
     business_id: str = Path(...),
     return_id: str = Path(...),
     current_user: UserResponse = Depends(get_current_user),
-    service: SalesReturnService = Depends(get_sales_return_service),
+    service: SalesReturnService = Depends(get_scoped_sales_return_service),
 ):
     return await service.cancel_return(business_id, return_id, current_user.id)

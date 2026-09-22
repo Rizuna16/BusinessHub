@@ -1,9 +1,12 @@
 from typing import Optional
 from fastapi import APIRouter, Depends, Path, Query, status
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.core.database import get_db_session
 from app.modules.authentication.router import get_current_user
 from app.modules.authentication.schemas import UserResponse
+from app.modules.business_membership.service import BusinessMembershipService
 from app.modules.delivery_note.schemas import (
     DeliveryNoteResponse,
     DeliveryNoteListResponse,
@@ -25,12 +28,30 @@ def get_delivery_note_svc() -> DeliveryNoteService:
     return delivery_note_service
 
 
+async def get_scoped_delivery_note_service(session: AsyncSession = Depends(get_db_session)) -> DeliveryNoteService:
+    from app.core.container import RepositoryContainer
+
+    container = RepositoryContainer(session)
+    membership_svc = BusinessMembershipService(
+        repository=container.business_membership,
+        user_repo=container.user,
+        account_repo=container.account,
+        business_repo=container.business,
+    )
+    return DeliveryNoteService(
+        delivery_note_repo=container.delivery_note,
+        sales_order_repo=container.sales_order,
+        membership_service=membership_svc,
+        session=session,
+    )
+
+
 @delivery_note_router.post("", response_model=DeliveryNoteResponse, status_code=status.HTTP_201_CREATED)
 async def create_delivery_note(
     payload: DeliveryNoteCreate,
     business_id: str = Path(...),
     current_user: UserResponse = Depends(get_current_user),
-    service: DeliveryNoteService = Depends(get_delivery_note_svc),
+    service: DeliveryNoteService = Depends(get_scoped_delivery_note_service),
 ) -> DeliveryNoteResponse:
     return await service.create_delivery_note(business_id, current_user.id, payload)
 
@@ -44,7 +65,7 @@ async def list_delivery_notes(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     current_user: UserResponse = Depends(get_current_user),
-    service: DeliveryNoteService = Depends(get_delivery_note_svc),
+    service: DeliveryNoteService = Depends(get_scoped_delivery_note_service),
 ) -> DeliveryNoteListResponse:
     return await service.list_delivery_notes(
         business_id=business_id, user_id=current_user.id,
@@ -58,7 +79,7 @@ async def get_delivery_note(
     business_id: str = Path(...),
     delivery_note_id: str = Path(...),
     current_user: UserResponse = Depends(get_current_user),
-    service: DeliveryNoteService = Depends(get_delivery_note_svc),
+    service: DeliveryNoteService = Depends(get_scoped_delivery_note_service),
 ) -> DeliveryNoteResponse:
     return await service.get_delivery_note(business_id, delivery_note_id, current_user.id)
 
@@ -69,7 +90,7 @@ async def update_delivery_note(
     business_id: str = Path(...),
     delivery_note_id: str = Path(...),
     current_user: UserResponse = Depends(get_current_user),
-    service: DeliveryNoteService = Depends(get_delivery_note_svc),
+    service: DeliveryNoteService = Depends(get_scoped_delivery_note_service),
 ) -> DeliveryNoteResponse:
     return await service.update_delivery_note(business_id, delivery_note_id, current_user.id, payload)
 
@@ -80,7 +101,7 @@ async def add_delivery_note_line(
     business_id: str = Path(...),
     delivery_note_id: str = Path(...),
     current_user: UserResponse = Depends(get_current_user),
-    service: DeliveryNoteService = Depends(get_delivery_note_svc),
+    service: DeliveryNoteService = Depends(get_scoped_delivery_note_service),
 ) -> DeliveryNoteLineResponse:
     return await service.add_line(business_id, delivery_note_id, current_user.id, payload)
 
@@ -93,7 +114,7 @@ async def update_delivery_note_line(
     delivery_quantity: float = Query(..., gt=0),
     notes: Optional[str] = Query(None),
     current_user: UserResponse = Depends(get_current_user),
-    service: DeliveryNoteService = Depends(get_delivery_note_svc),
+    service: DeliveryNoteService = Depends(get_scoped_delivery_note_service),
 ) -> DeliveryNoteLineResponse:
     from decimal import Decimal
     return await service.update_line(business_id, delivery_note_id, line_id, current_user.id, Decimal(str(delivery_quantity)), notes)
@@ -105,7 +126,7 @@ async def delete_delivery_note_line(
     delivery_note_id: str = Path(...),
     line_id: str = Path(...),
     current_user: UserResponse = Depends(get_current_user),
-    service: DeliveryNoteService = Depends(get_delivery_note_svc),
+    service: DeliveryNoteService = Depends(get_scoped_delivery_note_service),
 ) -> dict:
     return await service.delete_line(business_id, delivery_note_id, line_id, current_user.id)
 
@@ -115,7 +136,7 @@ async def ready_delivery_note(
     business_id: str = Path(...),
     delivery_note_id: str = Path(...),
     current_user: UserResponse = Depends(get_current_user),
-    service: DeliveryNoteService = Depends(get_delivery_note_svc),
+    service: DeliveryNoteService = Depends(get_scoped_delivery_note_service),
 ) -> DeliveryNoteResponse:
     return await service.ready_delivery_note(business_id, delivery_note_id, current_user.id)
 
@@ -125,7 +146,7 @@ async def deliver_delivery_note(
     business_id: str = Path(...),
     delivery_note_id: str = Path(...),
     current_user: UserResponse = Depends(get_current_user),
-    service: DeliveryNoteService = Depends(get_delivery_note_svc),
+    service: DeliveryNoteService = Depends(get_scoped_delivery_note_service),
 ) -> DeliveryNoteResponse:
     return await service.deliver_delivery_note(business_id, delivery_note_id, current_user.id)
 
@@ -135,6 +156,6 @@ async def cancel_delivery_note(
     business_id: str = Path(...),
     delivery_note_id: str = Path(...),
     current_user: UserResponse = Depends(get_current_user),
-    service: DeliveryNoteService = Depends(get_delivery_note_svc),
+    service: DeliveryNoteService = Depends(get_scoped_delivery_note_service),
 ) -> DeliveryNoteResponse:
     return await service.cancel_delivery_note(business_id, delivery_note_id, current_user.id)

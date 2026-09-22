@@ -44,6 +44,7 @@ class TransferLineInDB(BaseModel):
     variant_id: Optional[str] = None
     quantity: Decimal
     unit_cost_snapshot: Decimal = Decimal("0")
+    batch_snapshots: Optional[List[dict]] = None
     created_at: datetime
     updated_at: datetime
 

@@ -109,6 +109,17 @@ class SQLAlchemySalesReturnRepository(AbstractSalesReturnRepository):
         obj = result.scalar_one_or_none()
         return _to_sales_return_in_db(obj) if obj else None
 
+    async def get_sales_return_for_update(
+        self, return_id: str, business_id: str
+    ) -> Optional[SalesReturnInDB]:
+        stmt = select(SalesReturnModel).where(
+            SalesReturnModel.id == return_id,
+            SalesReturnModel.business_id == business_id,
+        ).with_for_update()
+        result = await self.session.execute(stmt)
+        obj = result.scalar_one_or_none()
+        return _to_sales_return_in_db(obj) if obj else None
+
     async def get_next_return_sequence(self, business_id: str) -> int:
         from sqlalchemy import Integer
         stmt = select(func.max(func.cast(SalesReturnModel.return_number, Integer))).where(

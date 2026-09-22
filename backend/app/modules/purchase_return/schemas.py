@@ -100,6 +100,7 @@ class PurchaseReturnLineInDB(BaseModel):
     tax_amount: Decimal
     line_subtotal: Decimal
     line_total: Decimal
+    batch_allocations: Optional[List[dict]] = None
     created_at: datetime
     updated_at: datetime
 

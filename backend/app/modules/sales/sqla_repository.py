@@ -51,6 +51,8 @@ def _to_sales_line_in_db(obj: SalesLineModel) -> SalesLineInDB:
         quantity=obj.quantity,
         unit_price=obj.unit_price,
         discount_amount=obj.discount_amount,
+        discount_rule_id=obj.discount_rule_id,
+        discount_rule_name_snapshot=obj.discount_rule_name_snapshot,
         tax_amount=obj.tax_amount,
         line_subtotal=obj.line_subtotal,
         line_total=obj.line_total,
@@ -100,6 +102,16 @@ class SQLAlchemySalesRepository(AbstractSalesRepository):
             SalesModel.business_id == business_id,
             SalesModel.is_deleted == False,
         )
+        result = await self.session.execute(stmt)
+        obj = result.scalar_one_or_none()
+        return _to_sales_in_db(obj) if obj else None
+
+    async def get_sales_for_update(self, sales_id: str, business_id: str) -> Optional[SalesInDB]:
+        stmt = select(SalesModel).where(
+            SalesModel.id == sales_id,
+            SalesModel.business_id == business_id,
+            SalesModel.is_deleted == False,
+        ).with_for_update()
         result = await self.session.execute(stmt)
         obj = result.scalar_one_or_none()
         return _to_sales_in_db(obj) if obj else None
@@ -241,6 +253,8 @@ class SQLAlchemySalesRepository(AbstractSalesRepository):
         tax_amount: Decimal,
         line_subtotal: Decimal,
         line_total: Decimal,
+        discount_rule_id: Optional[str] = None,
+        discount_rule_name_snapshot: Optional[str] = None,
     ) -> SalesLineInDB:
         data = {
             "id": str(uuid.uuid4()),
@@ -251,6 +265,8 @@ class SQLAlchemySalesRepository(AbstractSalesRepository):
             "quantity": quantity,
             "unit_price": unit_price,
             "discount_amount": discount_amount,
+            "discount_rule_id": discount_rule_id,
+            "discount_rule_name_snapshot": discount_rule_name_snapshot,
             "tax_amount": tax_amount,
             "line_subtotal": line_subtotal,
             "line_total": line_total,

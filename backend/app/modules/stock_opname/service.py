@@ -3,6 +3,7 @@ from decimal import Decimal
 from datetime import datetime, timezone
 import uuid
 from fastapi import HTTPException, status
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.stock_opname.schemas import (
     StockOpnameInDB,
@@ -27,6 +28,7 @@ from app.modules.inventory.schemas import (
     ReferenceType,
 )
 from app.modules.business_membership.schemas import BusinessMembershipRole
+from app.modules.inventory_batch.service import inventory_batch_service
 
 
 class StockOpnameService:
@@ -34,9 +36,11 @@ class StockOpnameService:
         self,
         opname_repo: AbstractStockOpnameRepository = stock_opname_repository,
         inv_service: InventoryService = inventory_service,
+        session: Optional[AsyncSession] = None,
     ):
         self.opname_repo = opname_repo
         self.inv_service = inv_service
+        self.session = session
 
     async def create_opname(
         self, business_id: str, user_id: str, payload: StockOpnameCreate
@@ -195,6 +199,15 @@ class StockOpnameService:
     async def finalize_opname(
         self, business_id: str, opname_id: str, user_id: str
     ) -> StockOpnameResponse:
+        if self.session is not None:
+            async with self.session.begin():
+                return await self._finalize_opname_impl(business_id, opname_id, user_id)
+        else:
+            return await self._finalize_opname_impl(business_id, opname_id, user_id)
+
+    async def _finalize_opname_impl(
+        self, business_id: str, opname_id: str, user_id: str
+    ) -> StockOpnameResponse:
         await self.inv_service._validate_access(
             business_id, user_id, required_roles=(BusinessMembershipRole.OWNER, BusinessMembershipRole.ADMIN)
         )
@@ -312,6 +325,26 @@ class StockOpnameService:
                     variant_id=line.variant_id,
                     new_physical_qty=new_phys_qty,
                     reference_id=opname.id,
+                )
+
+            # Per-batch adjustment for each opname line
+            for line in lines:
+                if line.variance is None or line.variance == Decimal("0"):
+                    continue
+                await inventory_batch_service.record_batch_adjustment(
+                    business_id=business_id,
+                    inventory_location_id=opname.inventory_location_id,
+                    product_id=line.product_id,
+                    variant_id=line.variant_id,
+                    batch_id=f"SO:{opname_id}:{line.id}",
+                    delta=line.variance,
+                    stock_movement_id=f"SO:{opname_id}:{line.id}",
+                )
+            for line in lines:
+                if line.variance is None or line.variance == Decimal("0"):
+                    continue
+                await inventory_batch_service.validate_batch_aggregate_invariant(
+                    business_id, opname.inventory_location_id, line.product_id, line.variant_id,
                 )
         except Exception as exc:
             # Revert in-memory repos to pre-finalization state on failure (atomic rollback)

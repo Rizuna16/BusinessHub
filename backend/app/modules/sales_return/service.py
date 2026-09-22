@@ -2,6 +2,7 @@ from typing import Any, Dict, List, Optional
 from decimal import Decimal
 from datetime import datetime, timezone
 from fastapi import HTTPException, status
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.sales_return.schemas import (
     SalesReturnInDB,
@@ -44,6 +45,7 @@ from app.modules.delivery_note.schemas import DeliveryNoteStatus
 from app.modules.sales_order.availability import _inventory_lock
 from app.modules.customer.repository import customer_repository
 from app.modules.customer_credit.repository import store_credit_ledger_repository
+from app.modules.inventory_batch.service import inventory_batch_service
 
 
 class SalesReturnService:
@@ -51,9 +53,11 @@ class SalesReturnService:
         self,
         return_repo: AbstractSalesReturnRepository = sales_return_repository,
         membership_service: BusinessMembershipService = business_membership_service,
+        session: Optional[AsyncSession] = None,
     ):
         self.return_repo = return_repo
         self.membership_service = membership_service
+        self.session = session
 
     # ----------------------------------------------------------------
     # ATOMICITY — Snapshot / Restore (Feature #59)
@@ -219,6 +223,27 @@ class SalesReturnService:
     async def create_return(
         self, business_id: str, user_id: str, payload: SalesReturnCreate
     ) -> SalesReturnResponse:
+        if self.session is not None:
+            async with self.session.begin():
+                return await self._create_return_with_retry(business_id, user_id, payload)
+        return await self._create_return_with_retry(business_id, user_id, payload)
+
+    async def _create_return_with_retry(self, business_id: str, user_id: str, payload: SalesReturnCreate) -> SalesReturnResponse:
+        for attempt in range(3):
+            try:
+                if self.session is not None:
+                    async with self.session.begin_nested():
+                        return await self._create_return_impl(business_id, user_id, payload)
+                else:
+                    return await self._create_return_impl(business_id, user_id, payload)
+            except Exception as e:
+                err_str = str(e).lower()
+                if ("unique" in err_str and ("return_number" in err_str or "uq_sales_return" in err_str)) and attempt < 2:
+                    continue
+                raise
+        raise HTTPException(status_code=409, detail="Document number collision; please retry")
+
+    async def _create_return_impl(self, business_id: str, user_id: str, payload: SalesReturnCreate) -> SalesReturnResponse:
         await self._validate_access(
             business_id, user_id, required_roles=(BusinessMembershipRole.OWNER, BusinessMembershipRole.ADMIN)
         )
@@ -577,13 +602,22 @@ class SalesReturnService:
     async def finalize_return(
         self, business_id: str, return_id: str, user_id: str
     ) -> SalesReturnResponse:
+        if self.session is not None:
+            async with self.session.begin():
+                return await self._finalize_return_impl(business_id, return_id, user_id)
+        else:
+            return await self._finalize_return_impl(business_id, return_id, user_id)
+
+    async def _finalize_return_impl(
+        self, business_id: str, return_id: str, user_id: str
+    ) -> SalesReturnResponse:
         await self._validate_access(
             business_id, user_id, required_roles=(BusinessMembershipRole.OWNER, BusinessMembershipRole.ADMIN)
         )
 
         _inventory_lock.acquire()
         try:
-            r = await self.return_repo.get_return_by_id(return_id, business_id)
+            r = await self.return_repo.get_sales_return_for_update(return_id, business_id)
             if not r:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
@@ -749,6 +783,24 @@ class SalesReturnService:
                         reference_id=return_id,
                     )
 
+                # Batch restoration via record_batch_inbound for returned goods
+                for l in lines:
+                    await inventory_batch_service.record_batch_inbound(
+                        business_id=business_id,
+                        inventory_location_id=r.inventory_location_id,
+                        product_id=l.product_id,
+                        variant_id=l.variant_id,
+                        batch_number=f"RET:{return_id}:{l.id}",
+                        quantity=l.quantity,
+                        manufacture_date=None,
+                        expiry_date=None,
+                        stock_movement_id=f"SRT:{return_id}:{l.id}",
+                    )
+                for l in lines:
+                    await inventory_batch_service.validate_batch_aggregate_invariant(
+                        business_id, r.inventory_location_id, l.product_id, l.variant_id,
+                    )
+
                 updated = await self.return_repo.update_return(
                     return_id=return_id,
                     business_id=business_id,
@@ -816,7 +868,7 @@ class SalesReturnService:
         await self._validate_access(
             business_id, user_id, required_roles=(BusinessMembershipRole.OWNER, BusinessMembershipRole.ADMIN)
         )
-        r = await self.return_repo.get_return_by_id(return_id, business_id)
+        r = await self.return_repo.get_sales_return_for_update(return_id, business_id)
         if not r:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,

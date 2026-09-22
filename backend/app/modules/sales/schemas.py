@@ -126,6 +126,8 @@ class SalesLineInDB(BaseModel):
     quantity: Decimal
     unit_price: Decimal
     discount_amount: Decimal
+    discount_rule_id: Optional[str] = None
+    discount_rule_name_snapshot: Optional[str] = None
     tax_amount: Decimal
     line_subtotal: Decimal
     line_total: Decimal

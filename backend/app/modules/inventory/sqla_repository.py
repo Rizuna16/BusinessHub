@@ -1,3 +1,4 @@
+import uuid
 from datetime import datetime, timezone
 from typing import Optional, List
 from decimal import Decimal
@@ -127,6 +128,27 @@ class SQLAlchemyStockBalanceRepository(AbstractStockBalanceRepository):
         obj = res.scalar_one_or_none()
         return _to_stock_balance(obj) if obj else None
 
+    async def get_balance_for_update(
+        self,
+        business_id: str,
+        inventory_location_id: str,
+        product_id: str,
+        variant_id: Optional[str] = None,
+    ) -> Optional[StockBalanceInDB]:
+        filters = [
+            StockBalance.business_id == business_id,
+            StockBalance.inventory_location_id == inventory_location_id,
+            StockBalance.product_id == product_id,
+        ]
+        if variant_id is not None:
+            filters.append(StockBalance.variant_id == variant_id)
+        else:
+            filters.append(StockBalance.variant_id == None)
+        stmt = select(StockBalance).where(and_(*filters)).with_for_update()
+        res = await self.session.execute(stmt)
+        obj = res.scalar_one_or_none()
+        return _to_stock_balance(obj) if obj else None
+
     async def get_by_id(self, stock_id: str, business_id: str) -> Optional[StockBalanceInDB]:
         stmt = select(StockBalance).where(
             StockBalance.id == stock_id,
@@ -153,9 +175,11 @@ class SQLAlchemyStockBalanceRepository(AbstractStockBalanceRepository):
             filters.append(StockBalance.variant_id == variant_id)
         else:
             filters.append(StockBalance.variant_id == None)
-        stmt = select(StockBalance).where(and_(*filters))
+
+        stmt = select(StockBalance).where(and_(*filters)).with_for_update()
         res = await self.session.execute(stmt)
         obj = res.scalar_one_or_none()
+
         if obj:
             new_qty = obj.quantity + delta
             if new_qty < Decimal("0"):
@@ -166,15 +190,30 @@ class SQLAlchemyStockBalanceRepository(AbstractStockBalanceRepository):
         else:
             if delta < Decimal("0"):
                 raise ValueError("Stock balance cannot be negative")
-            data = {
-                "business_id": business_id,
-                "inventory_location_id": inventory_location_id,
-                "product_id": product_id,
-                "variant_id": variant_id,
-                "quantity": delta,
-            }
-            obj = await sa_create(self.session, StockBalance, data)
-            return _to_stock_balance(obj)
+            try:
+                data = {
+                    "id": str(uuid.uuid4()),
+                    "business_id": business_id,
+                    "inventory_location_id": inventory_location_id,
+                    "product_id": product_id,
+                    "variant_id": variant_id,
+                    "quantity": delta,
+                }
+                obj = await sa_create(self.session, StockBalance, data)
+                return _to_stock_balance(obj)
+            except Exception:
+                # Concurrent insert race condition fallback
+                stmt = select(StockBalance).where(and_(*filters)).with_for_update()
+                res = await self.session.execute(stmt)
+                obj = res.scalar_one_or_none()
+                if obj:
+                    new_qty = obj.quantity + delta
+                    if new_qty < Decimal("0"):
+                        raise ValueError("Stock balance cannot be negative")
+                    obj.quantity = new_qty
+                    await self.session.flush()
+                    return _to_stock_balance(obj)
+                raise
 
     async def list_balances(
         self,
@@ -337,25 +376,41 @@ class SQLAlchemyInventoryCostRepository(AbstractInventoryCostRepository):
             filters.append(InventoryCostState.variant_id == variant_id)
         else:
             filters.append(InventoryCostState.variant_id == None)
-        stmt = select(InventoryCostState).where(and_(*filters))
+
+        stmt = select(InventoryCostState).where(and_(*filters)).with_for_update()
         res = await self.session.execute(stmt)
         obj = res.scalar_one_or_none()
+
         if obj:
             obj.quantity = quantity
             obj.total_cost = total_cost
             obj.unit_cost = unit_cost
             await self.session.flush()
             return _to_cost_state(obj)
-        data = {
-            "business_id": business_id,
-            "product_id": product_id,
-            "variant_id": variant_id,
-            "quantity": quantity,
-            "total_cost": total_cost,
-            "unit_cost": unit_cost,
-        }
-        obj = await sa_create(self.session, InventoryCostState, data)
-        return _to_cost_state(obj)
+
+        try:
+            data = {
+                "id": str(uuid.uuid4()),
+                "business_id": business_id,
+                "product_id": product_id,
+                "variant_id": variant_id,
+                "quantity": quantity,
+                "total_cost": total_cost,
+                "unit_cost": unit_cost,
+            }
+            obj = await sa_create(self.session, InventoryCostState, data)
+            return _to_cost_state(obj)
+        except Exception:
+            stmt = select(InventoryCostState).where(and_(*filters)).with_for_update()
+            res = await self.session.execute(stmt)
+            obj = res.scalar_one_or_none()
+            if obj:
+                obj.quantity = quantity
+                obj.total_cost = total_cost
+                obj.unit_cost = unit_cost
+                await self.session.flush()
+                return _to_cost_state(obj)
+            raise
 
     async def create_cost_movement(
         self,
