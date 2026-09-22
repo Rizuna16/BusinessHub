@@ -28,6 +28,7 @@ def _to_product_in_db(obj: Product) -> ProductInDB:
         product_type=ProductType(obj.product_type),
         tax_treatment=ProductTaxTreatment(obj.tax_treatment),
         status=ProductStatus(obj.status),
+        batch_tracking_enabled=getattr(obj, 'batch_tracking_enabled', False),
         created_at=obj.created_at,
         updated_at=obj.updated_at,
     )

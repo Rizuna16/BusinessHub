@@ -26,6 +26,7 @@ class ProductCreate(BaseModel):
     unit_id: str
     product_type: ProductType
     tax_treatment: ProductTaxTreatment = ProductTaxTreatment.STANDARD_NON_LUXURY
+    batch_tracking_enabled: bool = False
 
     @field_validator("name")
     @classmethod
@@ -57,6 +58,7 @@ class ProductUpdate(BaseModel):
     unit_id: Optional[str] = None
     product_type: Optional[ProductType] = None
     tax_treatment: Optional[ProductTaxTreatment] = None
+    batch_tracking_enabled: Optional[bool] = None
 
     @field_validator("name")
     @classmethod
@@ -95,6 +97,7 @@ class ProductResponse(BaseModel):
     product_type: ProductType
     tax_treatment: ProductTaxTreatment = ProductTaxTreatment.STANDARD_NON_LUXURY
     status: ProductStatus
+    batch_tracking_enabled: bool = False
     created_at: str
     updated_at: str
 
@@ -111,6 +114,7 @@ class ProductResponse(BaseModel):
             product_type=db_obj.product_type,
             tax_treatment=getattr(db_obj, 'tax_treatment', ProductTaxTreatment.STANDARD_NON_LUXURY),
             status=db_obj.status,
+            batch_tracking_enabled=getattr(db_obj, 'batch_tracking_enabled', False),
             created_at=db_obj.created_at.isoformat(),
             updated_at=db_obj.updated_at.isoformat(),
         )

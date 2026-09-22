@@ -26,6 +26,7 @@ class ProductInDB(BaseModel):
     product_type: ProductType
     tax_treatment: ProductTaxTreatment = ProductTaxTreatment.STANDARD_NON_LUXURY
     status: ProductStatus = ProductStatus.ACTIVE
+    batch_tracking_enabled: bool = False
     created_at: datetime
     updated_at: datetime
 
@@ -110,6 +111,7 @@ class InMemoryProductRepository(AbstractProductRepository):
             product_type=product_data.product_type,
             tax_treatment=product_data.tax_treatment,
             status=ProductStatus.ACTIVE,
+            batch_tracking_enabled=product_data.batch_tracking_enabled,
             created_at=now,
             updated_at=now,
         )
