@@ -21,6 +21,15 @@ class AbstractSubscriptionRepository(ABC):
     async def get_by_id(self, subscription_id: str) -> Optional[SubscriptionInDB]:
         pass
 
+    async def get_by_id_for_update(self, subscription_id: str) -> Optional[SubscriptionInDB]:
+        return await self.get_by_id(subscription_id)
+
+    async def get_billing_period_for_update(self, bp_id: str) -> Optional[BillingPeriod]:
+        return await self.get_billing_period(bp_id)
+
+    async def get_payment_attempt_for_update(self, pa_id: str) -> Optional[PaymentAttempt]:
+        return await self.get_payment_attempt(pa_id)
+
     @abstractmethod
     async def get_by_business_id(self, business_id: str) -> Optional[SubscriptionInDB]:
         pass
@@ -35,6 +44,30 @@ class AbstractSubscriptionRepository(ABC):
 
     @abstractmethod
     async def count(self) -> int:
+        pass
+
+    @abstractmethod
+    async def create_entitlement(self, plan_id: str, feature_key: str, limit_value: int) -> "PlanEntitlementInDB":
+        pass
+
+    @abstractmethod
+    async def get_entitlement(self, plan_id: str, feature_key: str) -> Optional["PlanEntitlementInDB"]:
+        pass
+
+    @abstractmethod
+    async def get_entitlement_by_id(self, entitlement_id: str) -> Optional["PlanEntitlementInDB"]:
+        pass
+
+    @abstractmethod
+    async def list_entitlements(self, plan_id: str) -> List["PlanEntitlementInDB"]:
+        pass
+
+    @abstractmethod
+    async def update_entitlement(self, entitlement_id: str, limit_value: int) -> Optional["PlanEntitlementInDB"]:
+        pass
+
+    @abstractmethod
+    async def delete_entitlement(self, entitlement_id: str) -> bool:
         pass
 
     @classmethod
@@ -54,6 +87,8 @@ class InMemorySubscriptionRepository(AbstractSubscriptionRepository):
     _payment_attempts: Dict[str, PaymentAttempt] = {}
     _pa_order_index: Dict[str, str] = {}
     _pa_billing_period_index: Dict[str, List[str]] = {}
+    _entitlements: Dict[str, "PlanEntitlementInDB"] = {}
+    _plan_key_index: Dict[str, str] = {}  # "plan_id:feature_key" -> id
     _lock = asyncio.Lock()
     _initialized = False
 
@@ -153,6 +188,9 @@ class InMemorySubscriptionRepository(AbstractSubscriptionRepository):
     async def get_by_id(self, subscription_id: str) -> Optional[SubscriptionInDB]:
         return self._subscriptions.get(subscription_id)
 
+    async def get_by_id_for_update(self, subscription_id: str) -> Optional[SubscriptionInDB]:
+        return self._subscriptions.get(subscription_id)
+
     async def get_by_business_id(self, business_id: str) -> Optional[SubscriptionInDB]:
         sub_id = self._business_index.get(business_id)
         if not sub_id:
@@ -183,6 +221,8 @@ class InMemorySubscriptionRepository(AbstractSubscriptionRepository):
         cls._payment_attempts.clear()
         cls._pa_order_index.clear()
         cls._pa_billing_period_index.clear()
+        cls._entitlements.clear()
+        cls._plan_key_index.clear()
         cls._initialized = False
 
     async def create_plan(self, plan: SubscriptionPlan) -> SubscriptionPlan:
@@ -283,6 +323,64 @@ class InMemorySubscriptionRepository(AbstractSubscriptionRepository):
             pa.updated_at = datetime.now(timezone.utc)
             self._payment_attempts[pa.id] = pa
             return pa
+
+    async def create_entitlement(self, plan_id: str, feature_key: str, limit_value: int) -> "PlanEntitlementInDB":
+        from app.modules.subscription.schemas import PlanEntitlementInDB
+        async with self._lock:
+            composite_key = f"{plan_id}:{feature_key}"
+            if composite_key in self._plan_key_index:
+                raise ValueError(f"Entitlement already exists for plan {plan_id}, key {feature_key}")
+            now = datetime.now(timezone.utc)
+            ent = PlanEntitlementInDB(
+                id=str(uuid.uuid4()),
+                plan_id=plan_id,
+                feature_key=feature_key,
+                limit_value=limit_value,
+                created_at=now,
+                updated_at=now,
+            )
+            self._entitlements[ent.id] = ent
+            self._plan_key_index[composite_key] = ent.id
+            return ent
+
+    async def get_entitlement(self, plan_id: str, feature_key: str) -> Optional["PlanEntitlementInDB"]:
+        composite_key = f"{plan_id}:{feature_key}"
+        ent_id = self._plan_key_index.get(composite_key)
+        if ent_id:
+            return self._entitlements.get(ent_id)
+        return None
+
+    async def get_entitlement_by_id(self, entitlement_id: str) -> Optional["PlanEntitlementInDB"]:
+        return self._entitlements.get(entitlement_id)
+
+    async def list_entitlements(self, plan_id: str) -> List["PlanEntitlementInDB"]:
+        return [e for e in self._entitlements.values() if e.plan_id == plan_id]
+
+    async def update_entitlement(self, entitlement_id: str, limit_value: int) -> Optional["PlanEntitlementInDB"]:
+        from app.modules.subscription.schemas import PlanEntitlementInDB
+        async with self._lock:
+            ent = self._entitlements.get(entitlement_id)
+            if not ent:
+                return None
+            updated = PlanEntitlementInDB(
+                id=ent.id,
+                plan_id=ent.plan_id,
+                feature_key=ent.feature_key,
+                limit_value=limit_value,
+                created_at=ent.created_at,
+                updated_at=datetime.now(timezone.utc),
+            )
+            self._entitlements[entitlement_id] = updated
+            return updated
+
+    async def delete_entitlement(self, entitlement_id: str) -> bool:
+        async with self._lock:
+            ent = self._entitlements.pop(entitlement_id, None)
+            if ent:
+                composite_key = f"{ent.plan_id}:{ent.feature_key}"
+                self._plan_key_index.pop(composite_key, None)
+                return True
+            return False
 
 
 subscription_repository = InMemorySubscriptionRepository()

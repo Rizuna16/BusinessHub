@@ -106,6 +106,10 @@ class BranchService:
                 detail=f"A branch with code '{payload.code}' already exists in this business.",
             )
 
+        # Feature #63: quota enforcement
+        from app.modules.subscription.service import SubscriptionService
+        await SubscriptionService().check_quota(business_id, "max_branches")
+
         # Check if first active branch in this business -> auto-set as default
         active_count = await self.repository.count_active(business_id)
         is_default = (active_count == 0)

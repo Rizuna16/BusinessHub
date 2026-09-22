@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from enum import Enum
 from typing import Optional
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, field_validator
 
 
 class SubscriptionStatus(str, Enum):
@@ -221,6 +221,52 @@ class PlanResponse(BaseModel):
     currency: str
     billing_interval: BillingInterval
     is_active: bool
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+SUPPORTED_ENTITLEMENT_KEYS = frozenset({"max_products", "max_members", "max_branches", "max_warehouses"})
+
+
+class PlanEntitlementCreate(BaseModel):
+    plan_id: str = Field(..., min_length=1)
+    feature_key: str = Field(..., min_length=1)
+    limit_value: int = Field(..., ge=-1)
+
+    @field_validator("feature_key")
+    @classmethod
+    def validate_feature_key(cls, v: str) -> str:
+        if v not in SUPPORTED_ENTITLEMENT_KEYS:
+            raise ValueError(f"Unsupported feature key: {v}. Supported: {sorted(SUPPORTED_ENTITLEMENT_KEYS)}")
+        return v
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class PlanEntitlementUpdate(BaseModel):
+    limit_value: int = Field(..., ge=-1)
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class PlanEntitlementInDB(BaseModel):
+    id: str
+    plan_id: str
+    feature_key: str
+    limit_value: int
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class PlanEntitlementResponse(BaseModel):
+    id: str
+    plan_id: str
+    feature_key: str
+    limit_value: int
     created_at: datetime
     updated_at: datetime
 

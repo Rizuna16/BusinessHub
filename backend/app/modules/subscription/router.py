@@ -1,12 +1,16 @@
 from fastapi import APIRouter, Depends, Request, Response
 from typing import List, Optional
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.database import get_db_session
+from app.core.container import RepositoryContainer
 from app.modules.authentication.schemas import UserInDB
 from app.modules.authentication.router import get_current_user
 from app.modules.subscription.schemas import (
     SubscriptionResponse, SubscriptionOverrideInput, SubscriptionStatus,
     PlanCreate, PlanUpdate, PlanResponse,
     BillingPeriodResponse, PaymentAttemptResponse, VerifyPaymentInput,
+    PlanEntitlementCreate, PlanEntitlementUpdate,
 )
 from app.modules.subscription.service import SubscriptionService, subscription_service
 from app.shared.utils import create_api_response
@@ -14,6 +18,17 @@ from app.modules.platform_admin.service import PlatformAdminService, platform_ad
 
 
 router = APIRouter(prefix="/api/v1/platform/subscriptions", tags=["Platform Subscriptions"])
+
+
+async def get_scoped_subscription_service(session: AsyncSession = Depends(get_db_session)) -> SubscriptionService:
+    """
+    Request-scoped SubscriptionService wired to the same AsyncSession for transaction boundary.
+    """
+    container = RepositoryContainer(session)
+    return SubscriptionService(
+        repository=container.subscription,
+        session=session,
+    )
 
 
 async def get_super_admin(
@@ -27,8 +42,9 @@ async def get_super_admin(
 async def list_subscriptions(
     status_filter: Optional[SubscriptionStatus] = None,
     superadmin: UserInDB = Depends(get_super_admin),
+    svc: SubscriptionService = Depends(get_scoped_subscription_service),
 ):
-    subs = await subscription_service.list_all(status_filter=status_filter)
+    subs = await svc.list_all(status_filter=status_filter)
     return create_api_response(success=True, data=[s.model_dump() for s in subs])
 
 
@@ -36,8 +52,9 @@ async def list_subscriptions(
 async def get_subscription(
     subscription_id: str,
     superadmin: UserInDB = Depends(get_super_admin),
+    svc: SubscriptionService = Depends(get_scoped_subscription_service),
 ):
-    sub = await subscription_service.get_by_id(subscription_id)
+    sub = await svc.get_by_id(subscription_id)
     if not sub:
         return create_api_response(success=False, message="Subscription not found.")
     return create_api_response(success=True, data=SubscriptionResponse.model_validate(sub).model_dump())
@@ -47,8 +64,9 @@ async def get_subscription(
 async def list_billing_periods(
     subscription_id: str,
     superadmin: UserInDB = Depends(get_super_admin),
+    svc: SubscriptionService = Depends(get_scoped_subscription_service),
 ):
-    bps = await subscription_service.get_billing_periods(subscription_id)
+    bps = await svc.get_billing_periods(subscription_id)
     return create_api_response(success=True, data=[bp.model_dump() for bp in bps])
 
 
@@ -56,8 +74,9 @@ async def list_billing_periods(
 async def checkout_subscription(
     subscription_id: str,
     superadmin: UserInDB = Depends(get_super_admin),
+    svc: SubscriptionService = Depends(get_scoped_subscription_service),
 ):
-    pa = await subscription_service.checkout(subscription_id)
+    pa = await svc.checkout(subscription_id)
     return create_api_response(success=True, data=pa.model_dump())
 
 
@@ -65,8 +84,9 @@ async def checkout_subscription(
 async def renew_subscription(
     subscription_id: str,
     superadmin: UserInDB = Depends(get_super_admin),
+    svc: SubscriptionService = Depends(get_scoped_subscription_service),
 ):
-    bp = await subscription_service.renew(subscription_id)
+    bp = await svc.renew(subscription_id)
     if bp is None:
         return create_api_response(
             success=False,
@@ -80,8 +100,9 @@ async def renew_subscription(
 async def retry_payment(
     subscription_id: str,
     superadmin: UserInDB = Depends(get_super_admin),
+    svc: SubscriptionService = Depends(get_scoped_subscription_service),
 ):
-    bps = await subscription_service.get_billing_periods(subscription_id)
+    bps = await svc.get_billing_periods(subscription_id)
     pending_bp = None
     for bp in bps:
         if bp.payment_status.value in ("PENDING", "PROCESSING", "FAILED"):
@@ -89,7 +110,7 @@ async def retry_payment(
             break
     if not pending_bp:
         return create_api_response(success=False, message="No retryable billing period found.")
-    pa = await subscription_service.retry_payment(pending_bp.id)
+    pa = await svc.retry_payment(pending_bp.id)
     return create_api_response(success=True, data=pa.model_dump())
 
 
@@ -97,8 +118,9 @@ async def retry_payment(
 async def reconcile_subscription(
     subscription_id: str,
     superadmin: UserInDB = Depends(get_super_admin),
+    svc: SubscriptionService = Depends(get_scoped_subscription_service),
 ):
-    result = await subscription_service.reconcile(subscription_id)
+    result = await svc.reconcile(subscription_id)
     return create_api_response(success=True, data=result)
 
 
@@ -110,8 +132,9 @@ async def verify_manual_payment(
     body: VerifyPaymentInput,
     superadmin: UserInDB = Depends(get_super_admin),
     service: PlatformAdminService = Depends(lambda: platform_admin_service),
+    svc: SubscriptionService = Depends(get_scoped_subscription_service),
 ):
-    pa_before = await subscription_service.repository.get_payment_attempt(payment_attempt_id)
+    pa_before = await svc.repository.get_payment_attempt(payment_attempt_id)
     before_state = None
     if pa_before:
         before_state = {
@@ -120,7 +143,7 @@ async def verify_manual_payment(
             "verified_by": pa_before.verified_by,
         }
 
-    pa = await subscription_service.verify_manual_payment(
+    pa = await svc.verify_manual_payment(
         subscription_id=subscription_id,
         billing_period_id=billing_period_id,
         payment_attempt_id=payment_attempt_id,
@@ -163,8 +186,9 @@ plans_router = APIRouter(prefix="/api/v1/platform/plans", tags=["Platform Plans"
 @plans_router.get("")
 async def list_plans(
     superadmin: UserInDB = Depends(get_super_admin),
+    svc: SubscriptionService = Depends(get_scoped_subscription_service),
 ):
-    plans = await subscription_service.plan_list()
+    plans = await svc.plan_list()
     return create_api_response(success=True, data=[p.model_dump() for p in plans])
 
 
@@ -172,8 +196,9 @@ async def list_plans(
 async def get_plan(
     plan_id: str,
     superadmin: UserInDB = Depends(get_super_admin),
+    svc: SubscriptionService = Depends(get_scoped_subscription_service),
 ):
-    plan = await subscription_service.plan_get(plan_id)
+    plan = await svc.plan_get(plan_id)
     return create_api_response(success=True, data=plan.model_dump())
 
 
@@ -181,8 +206,9 @@ async def get_plan(
 async def create_plan(
     plan_data: PlanCreate,
     superadmin: UserInDB = Depends(get_super_admin),
+    svc: SubscriptionService = Depends(get_scoped_subscription_service),
 ):
-    plan = await subscription_service.plan_create(plan_data)
+    plan = await svc.plan_create(plan_data)
     return create_api_response(success=True, data=plan.model_dump())
 
 
@@ -191,8 +217,9 @@ async def update_plan(
     plan_id: str,
     plan_data: PlanUpdate,
     superadmin: UserInDB = Depends(get_super_admin),
+    svc: SubscriptionService = Depends(get_scoped_subscription_service),
 ):
-    plan = await subscription_service.plan_update(plan_id, plan_data)
+    plan = await svc.plan_update(plan_id, plan_data)
     return create_api_response(success=True, data=plan.model_dump())
 
 
@@ -200,8 +227,9 @@ async def update_plan(
 async def activate_plan(
     plan_id: str,
     superadmin: UserInDB = Depends(get_super_admin),
+    svc: SubscriptionService = Depends(get_scoped_subscription_service),
 ):
-    plan = await subscription_service.plan_update(plan_id, PlanUpdate(is_active=True))
+    plan = await svc.plan_update(plan_id, PlanUpdate(is_active=True))
     return create_api_response(success=True, data=plan.model_dump())
 
 
@@ -209,6 +237,49 @@ async def activate_plan(
 async def deactivate_plan(
     plan_id: str,
     superadmin: UserInDB = Depends(get_super_admin),
+    svc: SubscriptionService = Depends(get_scoped_subscription_service),
 ):
-    plan = await subscription_service.plan_update(plan_id, PlanUpdate(is_active=False))
+    plan = await svc.plan_update(plan_id, PlanUpdate(is_active=False))
     return create_api_response(success=True, data=plan.model_dump())
+
+
+@plans_router.get("/{plan_id}/entitlements")
+async def list_plan_entitlements(
+    plan_id: str,
+    superadmin: UserInDB = Depends(get_super_admin),
+    svc: SubscriptionService = Depends(get_scoped_subscription_service),
+):
+    ents = await svc.entitlement_list(plan_id)
+    return create_api_response(success=True, data=[e.model_dump() for e in ents])
+
+
+@plans_router.post("/{plan_id}/entitlements")
+async def create_plan_entitlement(
+    plan_id: str,
+    body: PlanEntitlementCreate,
+    superadmin: UserInDB = Depends(get_super_admin),
+    svc: SubscriptionService = Depends(get_scoped_subscription_service),
+):
+    ent = await svc.entitlement_create(plan_id, body.feature_key, body.limit_value)
+    return create_api_response(success=True, data=ent.model_dump())
+
+
+@plans_router.put("/entitlements/{entitlement_id}")
+async def update_plan_entitlement(
+    entitlement_id: str,
+    body: PlanEntitlementUpdate,
+    superadmin: UserInDB = Depends(get_super_admin),
+    svc: SubscriptionService = Depends(get_scoped_subscription_service),
+):
+    ent = await svc.entitlement_update(entitlement_id, body.limit_value)
+    return create_api_response(success=True, data=ent.model_dump())
+
+
+@plans_router.delete("/entitlements/{entitlement_id}")
+async def delete_plan_entitlement(
+    entitlement_id: str,
+    superadmin: UserInDB = Depends(get_super_admin),
+    svc: SubscriptionService = Depends(get_scoped_subscription_service),
+):
+    await svc.entitlement_delete(entitlement_id)
+    return create_api_response(success=True, data={"deleted": True})

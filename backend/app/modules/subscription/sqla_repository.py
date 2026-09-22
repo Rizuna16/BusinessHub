@@ -9,6 +9,7 @@ from app.modules.subscription.models import (
     SubscriptionInDB as SubscriptionModel,
     BillingPeriod as BillingPeriodModel,
     PaymentAttempt as PaymentAttemptModel,
+    PlanEntitlement as PlanEntitlementModel,
 )
 from app.modules.subscription.repository import AbstractSubscriptionRepository
 from app.modules.subscription.schemas import (
@@ -20,6 +21,7 @@ from app.modules.subscription.schemas import (
     SubscriptionPlan,
     BillingPeriod,
     PaymentAttempt,
+    PlanEntitlementInDB,
 )
 from app.modules.sqla_base import sa_create
 
@@ -88,6 +90,17 @@ def _to_payment_attempt(obj: PaymentAttemptModel) -> PaymentAttempt:
     )
 
 
+def _to_entitlement(obj: PlanEntitlementModel) -> PlanEntitlementInDB:
+    return PlanEntitlementInDB(
+        id=obj.id,
+        plan_id=obj.plan_id,
+        feature_key=obj.feature_key,
+        limit_value=obj.limit_value,
+        created_at=obj.created_at,
+        updated_at=obj.updated_at,
+    )
+
+
 class SQLAlchemySubscriptionRepository(AbstractSubscriptionRepository):
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
@@ -146,6 +159,12 @@ class SQLAlchemySubscriptionRepository(AbstractSubscriptionRepository):
 
     async def get_by_id(self, subscription_id: str) -> Optional[SubscriptionInDB]:
         stmt = select(SubscriptionModel).where(SubscriptionModel.id == subscription_id)
+        res = await self.session.execute(stmt)
+        obj = res.scalar_one_or_none()
+        return _to_subscription(obj) if obj else None
+
+    async def get_by_id_for_update(self, subscription_id: str) -> Optional[SubscriptionInDB]:
+        stmt = select(SubscriptionModel).where(SubscriptionModel.id == subscription_id).with_for_update()
         res = await self.session.execute(stmt)
         obj = res.scalar_one_or_none()
         return _to_subscription(obj) if obj else None
@@ -235,6 +254,12 @@ class SQLAlchemySubscriptionRepository(AbstractSubscriptionRepository):
         obj = res.scalar_one_or_none()
         return _to_billing_period(obj) if obj else None
 
+    async def get_billing_period_for_update(self, bp_id: str) -> Optional[BillingPeriod]:
+        stmt = select(BillingPeriodModel).where(BillingPeriodModel.id == bp_id).with_for_update()
+        res = await self.session.execute(stmt)
+        obj = res.scalar_one_or_none()
+        return _to_billing_period(obj) if obj else None
+
     async def get_billing_periods_for_subscription(self, subscription_id: str) -> List[BillingPeriod]:
         stmt = select(BillingPeriodModel).where(BillingPeriodModel.subscription_id == subscription_id)
         res = await self.session.execute(stmt)
@@ -289,6 +314,12 @@ class SQLAlchemySubscriptionRepository(AbstractSubscriptionRepository):
         obj = res.scalar_one_or_none()
         return _to_payment_attempt(obj) if obj else None
 
+    async def get_payment_attempt_for_update(self, pa_id: str) -> Optional[PaymentAttempt]:
+        stmt = select(PaymentAttemptModel).where(PaymentAttemptModel.id == pa_id).with_for_update()
+        res = await self.session.execute(stmt)
+        obj = res.scalar_one_or_none()
+        return _to_payment_attempt(obj) if obj else None
+
     async def get_payment_attempt_by_order_id(self, order_id: str) -> Optional[PaymentAttempt]:
         stmt = select(PaymentAttemptModel).where(PaymentAttemptModel.provider_order_id == order_id)
         res = await self.session.execute(stmt)
@@ -326,6 +357,104 @@ class SQLAlchemySubscriptionRepository(AbstractSubscriptionRepository):
         obj.verified_at = pa.verified_at
         await self.session.flush()
         return _to_payment_attempt(obj)
+
+    async def create_entitlement(self, plan_id: str, feature_key: str, limit_value: int) -> PlanEntitlementInDB:
+        data = {
+            "plan_id": plan_id,
+            "feature_key": feature_key,
+            "limit_value": limit_value,
+        }
+        obj = await sa_create(self.session, PlanEntitlementModel, data)
+        return _to_entitlement(obj)
+
+    async def get_entitlement(self, plan_id: str, feature_key: str) -> Optional[PlanEntitlementInDB]:
+        stmt = select(PlanEntitlementModel).where(
+            PlanEntitlementModel.plan_id == plan_id,
+            PlanEntitlementModel.feature_key == feature_key,
+        )
+        res = await self.session.execute(stmt)
+        obj = res.scalar_one_or_none()
+        return _to_entitlement(obj) if obj else None
+
+    async def get_entitlement_by_id(self, entitlement_id: str) -> Optional[PlanEntitlementInDB]:
+        stmt = select(PlanEntitlementModel).where(PlanEntitlementModel.id == entitlement_id)
+        res = await self.session.execute(stmt)
+        obj = res.scalar_one_or_none()
+        return _to_entitlement(obj) if obj else None
+
+    async def list_entitlements(self, plan_id: str) -> List[PlanEntitlementInDB]:
+        stmt = select(PlanEntitlementModel).where(PlanEntitlementModel.plan_id == plan_id)
+        res = await self.session.execute(stmt)
+        return [_to_entitlement(o) for o in res.scalars().all()]
+
+    async def update_entitlement(self, entitlement_id: str, limit_value: int) -> Optional[PlanEntitlementInDB]:
+        stmt = select(PlanEntitlementModel).where(PlanEntitlementModel.id == entitlement_id)
+        res = await self.session.execute(stmt)
+        obj = res.scalar_one_or_none()
+        if not obj:
+            return None
+        obj.limit_value = limit_value
+        await self.session.flush()
+        return _to_entitlement(obj)
+
+    async def delete_entitlement(self, entitlement_id: str) -> bool:
+        stmt = select(PlanEntitlementModel).where(PlanEntitlementModel.id == entitlement_id)
+        res = await self.session.execute(stmt)
+        obj = res.scalar_one_or_none()
+        if not obj:
+            return False
+        await self.session.delete(obj)
+        await self.session.flush()
+        return True
+
+    async def create_entitlement(self, plan_id: str, feature_key: str, limit_value: int) -> PlanEntitlementInDB:
+        data = {
+            "plan_id": plan_id,
+            "feature_key": feature_key,
+            "limit_value": limit_value,
+        }
+        obj = await sa_create(self.session, PlanEntitlementModel, data)
+        return _to_entitlement(obj)
+
+    async def get_entitlement(self, plan_id: str, feature_key: str) -> Optional[PlanEntitlementInDB]:
+        stmt = select(PlanEntitlementModel).where(
+            PlanEntitlementModel.plan_id == plan_id,
+            PlanEntitlementModel.feature_key == feature_key,
+        )
+        res = await self.session.execute(stmt)
+        obj = res.scalar_one_or_none()
+        return _to_entitlement(obj) if obj else None
+
+    async def get_entitlement_by_id(self, entitlement_id: str) -> Optional[PlanEntitlementInDB]:
+        stmt = select(PlanEntitlementModel).where(PlanEntitlementModel.id == entitlement_id)
+        res = await self.session.execute(stmt)
+        obj = res.scalar_one_or_none()
+        return _to_entitlement(obj) if obj else None
+
+    async def list_entitlements(self, plan_id: str) -> List[PlanEntitlementInDB]:
+        stmt = select(PlanEntitlementModel).where(PlanEntitlementModel.plan_id == plan_id)
+        res = await self.session.execute(stmt)
+        return [_to_entitlement(o) for o in res.scalars().all()]
+
+    async def update_entitlement(self, entitlement_id: str, limit_value: int) -> Optional[PlanEntitlementInDB]:
+        stmt = select(PlanEntitlementModel).where(PlanEntitlementModel.id == entitlement_id)
+        res = await self.session.execute(stmt)
+        obj = res.scalar_one_or_none()
+        if not obj:
+            return None
+        obj.limit_value = limit_value
+        await self.session.flush()
+        return _to_entitlement(obj)
+
+    async def delete_entitlement(self, entitlement_id: str) -> bool:
+        stmt = select(PlanEntitlementModel).where(PlanEntitlementModel.id == entitlement_id)
+        res = await self.session.execute(stmt)
+        obj = res.scalar_one_or_none()
+        if not obj:
+            return False
+        await self.session.delete(obj)
+        await self.session.flush()
+        return True
 
     @classmethod
     def clear(cls):

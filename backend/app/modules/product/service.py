@@ -82,6 +82,10 @@ class ProductService:
     ) -> ProductResponse:
         await self._require_admin_or_owner(business_id, user_id)
 
+        # Feature #63: quota enforcement
+        from app.modules.subscription.service import SubscriptionService
+        await SubscriptionService().check_quota(business_id, "max_products")
+
         # Validate code uniqueness (case-insensitive) within Business
         existing_code = await self.repository.find_by_code(business_id, data.code)
         if existing_code:

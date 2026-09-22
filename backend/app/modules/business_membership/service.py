@@ -146,6 +146,10 @@ class BusinessMembershipService:
                 detail="User already has a membership record in this business.",
             )
 
+        # Feature #63: quota enforcement
+        from app.modules.subscription.service import SubscriptionService
+        await SubscriptionService().check_quota(business_id, "max_members")
+
         new_membership = await self.repository.create(
             business_id=business_id,
             user_id=payload.user_id,
