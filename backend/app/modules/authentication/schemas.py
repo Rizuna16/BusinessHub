@@ -43,6 +43,12 @@ class TokenResponse(BaseModel):
     expires_in: int
 
 
+class AdminResetPasswordRequest(BaseModel):
+    target_user_id: str = Field(..., min_length=1)
+    new_password: str = Field(..., min_length=8)
+    password_confirmation: str = Field(..., min_length=8)
+
+
 class TokenPayload(BaseModel):
     sub: str
     platform_role: Optional[str] = None

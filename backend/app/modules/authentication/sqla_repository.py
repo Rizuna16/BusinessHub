@@ -78,3 +78,14 @@ class SQLAlchemyUserRepository(AbstractUserRepository):
         obj.platform_role = platform_role.value if platform_role else None
         await self.session.flush()
         return _to_user_in_db(obj)
+
+    async def update_password(self, user_id: str, password_hash: str) -> Optional[UserInDB]:
+        stmt = select(User).where(User.id == user_id)
+        result = await self.session.execute(stmt)
+        obj = result.scalar_one_or_none()
+        if not obj:
+            return None
+        obj.password_hash = password_hash
+        obj.updated_at = datetime.now(timezone.utc)
+        await self.session.flush()
+        return _to_user_in_db(obj)

@@ -32,6 +32,10 @@ class AbstractUserRepository(ABC):
     async def update_platform_role(self, user_id: str, platform_role: Optional[PlatformRole]) -> Optional[UserInDB]:
         pass
 
+    @abstractmethod
+    async def update_password(self, user_id: str, password_hash: str) -> Optional[UserInDB]:
+        pass
+
 
 class InMemoryUserRepository(AbstractUserRepository):
     """Thread-safe / process-safe singleton-like in-memory user store for modular monolith without SQL dependency yet."""
@@ -81,6 +85,14 @@ class InMemoryUserRepository(AbstractUserRepository):
         if not user:
             return None
         updated_user = user.model_copy(update={"platform_role": platform_role, "updated_at": datetime.now(timezone.utc)})
+        self._users[user_id] = updated_user
+        return updated_user
+
+    async def update_password(self, user_id: str, password_hash: str) -> Optional[UserInDB]:
+        user = self._users.get(user_id)
+        if not user:
+            return None
+        updated_user = user.model_copy(update={"password_hash": password_hash, "updated_at": datetime.now(timezone.utc)})
         self._users[user_id] = updated_user
         return updated_user
 

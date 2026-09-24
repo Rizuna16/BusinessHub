@@ -8,11 +8,14 @@ from app.modules.authentication.service import auth_service, AuthenticationServi
 from app.modules.authentication.schemas import (
     UserCreate,
     UserResponse,
+    UserInDB,
     LoginRequest,
     TokenResponse,
     TokenPayload,
+    AdminResetPasswordRequest,
 )
 from app.core.config import settings
+from app.shared.utils import create_api_response
 
 router = APIRouter(prefix=settings.api_v1_prefix + "/auth", tags=["Authentication"])
 
@@ -23,7 +26,10 @@ async def get_auth_service(session: AsyncSession = Depends(get_db_session)) -> A
     """Request-scoped AuthenticationService backed by PostgreSQL via SQLAlchemyUserRepository."""
     from app.core.container import RepositoryContainer
     container = RepositoryContainer(session)
-    return AuthenticationService(repository=container.user)
+    return AuthenticationService(
+        repository=container.user,
+        session=session,
+    )
 
 
 # Dependency to get the current authenticated user from the token
@@ -96,3 +102,59 @@ async def logout(
     # Frontend should clear the token from storage.
     # For session/cookie architecture, this would revoke/session_invalidate.
     return {"message": "Successfully logged out. Token has been revoked on client side."}
+
+
+async def _get_super_admin(
+    current_user: UserResponse = Depends(get_current_user),
+    auth_svc: AuthenticationService = Depends(get_auth_service),
+) -> UserInDB:
+    """Verify caller is an active SUPER_ADMIN."""
+    from app.modules.authentication.schemas import PlatformRole
+    # Re-fetch from DB to get UserInDB (including platform_role)
+    user = await auth_svc.repository.get_by_id(current_user.id)
+    if not user or not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Platform account is inactive or access denied."
+        )
+    if user.platform_role != PlatformRole.SUPER_ADMIN:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Platform Super Admin authority required."
+        )
+    return user
+
+
+@router.post("/admin/reset-password")
+async def admin_reset_password(
+    payload: AdminResetPasswordRequest,
+    superadmin: UserInDB = Depends(_get_super_admin),
+    auth_service: AuthenticationService = Depends(get_auth_service),
+):
+    """Reset a user's password. Requires authenticated SUPER_ADMIN."""
+    # Build a session-scoped audit logger for same-transaction audit
+    from app.core.container import RepositoryContainer
+    container = RepositoryContainer(auth_service.session)
+    audit_repo = container.platform_audit
+
+    async def _audit_log(**kwargs):
+        from app.modules.platform_admin.schemas import PlatformAuditLogCreate
+        entry = PlatformAuditLogCreate(
+            actor_account_id=superadmin.id,
+            actor_email=superadmin.email,
+            **kwargs,
+        )
+        await audit_repo.create(entry)
+
+    result = await auth_service.reset_password_by_admin(
+        target_user_id=payload.target_user_id,
+        new_password=payload.new_password,
+        password_confirmation=payload.password_confirmation,
+        audit_logger=_audit_log,
+    )
+
+    return create_api_response(
+        success=True,
+        data={"target_user_id": result["target_user_id"]},
+        message="Password berhasil direset.",
+    )
