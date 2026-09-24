@@ -1,5 +1,5 @@
 from datetime import datetime
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -13,6 +13,8 @@ from app.modules.authentication.schemas import (
     TokenResponse,
     TokenPayload,
     AdminResetPasswordRequest,
+    ForgotPasswordRequest,
+    ResetPasswordRequest,
 )
 from app.core.config import settings
 from app.shared.utils import create_api_response
@@ -98,10 +100,82 @@ async def logout(
     current_user: UserResponse = Depends(get_current_user),
 ) -> dict:
     """Logout the current user."""
-    # Stateless JWT: logout is client-side - token remains valid until expiry.
-    # Frontend should clear the token from storage.
-    # For session/cookie architecture, this would revoke/session_invalidate.
     return {"message": "Successfully logged out. Token has been revoked on client side."}
+
+
+GENERIC_FORGOT_RESPONSE = "Jika email terdaftar, instruksi reset telah dikirim ke email Anda."
+
+
+@router.post("/forgot-password")
+async def forgot_password(
+    payload: ForgotPasswordRequest,
+    request: Request,
+    auth_service: AuthenticationService = Depends(get_auth_service),
+):
+    """Request a password reset link. Always returns generic response."""
+    from app.core.rate_limit import is_rate_limited
+    from app.core.container import RepositoryContainer
+
+    ip_address = request.client.host if request.client else "unknown"
+
+    if is_rate_limited(payload.email, ip_address):
+        return create_api_response(
+            success=True,
+            message=GENERIC_FORGOT_RESPONSE,
+        )
+
+    container = RepositoryContainer(auth_service.session)
+    audit_repo = container.platform_audit
+
+    async def _audit_log(**kwargs):
+        from app.modules.platform_admin.schemas import PlatformAuditLogCreate
+        entry = PlatformAuditLogCreate(
+            actor_account_id="system",
+            actor_email="system@businesshub.local",
+            **kwargs,
+        )
+        await audit_repo.create(entry)
+
+    await auth_service.forgot_password(email=payload.email, ip_address=ip_address, audit_logger=_audit_log)
+    return create_api_response(
+        success=True,
+        message=GENERIC_FORGOT_RESPONSE,
+    )
+
+
+GENERIC_RESET_SUCCESS = "Password berhasil diubah. Silakan login."
+
+
+@router.post("/reset-password")
+async def reset_password(
+    payload: ResetPasswordRequest,
+    auth_service: AuthenticationService = Depends(get_auth_service),
+):
+    """Reset password using a valid reset token."""
+    from app.core.container import RepositoryContainer
+
+    container = RepositoryContainer(auth_service.session)
+    audit_repo = container.platform_audit
+
+    async def _audit_log(**kwargs):
+        from app.modules.platform_admin.schemas import PlatformAuditLogCreate
+        entry = PlatformAuditLogCreate(
+            actor_account_id="system",
+            actor_email="system@businesshub.local",
+            **kwargs,
+        )
+        await audit_repo.create(entry)
+
+    await auth_service.reset_password(
+        token=payload.token,
+        new_password=payload.new_password,
+        password_confirmation=payload.password_confirmation,
+        audit_logger=_audit_log,
+    )
+    return create_api_response(
+        success=True,
+        message=GENERIC_RESET_SUCCESS,
+    )
 
 
 async def _get_super_admin(

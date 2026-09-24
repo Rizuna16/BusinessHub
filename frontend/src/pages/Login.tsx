@@ -6,6 +6,25 @@ import { Card } from '../components/ui/Card';
 import { Input } from '../components/ui/Input';
 import { Button } from '../components/ui/Button';
 
+function mapLoginError(err: any): string {
+  const msg = String(err?.message || '');
+
+  if (msg.includes('Invalid email or password') || msg.includes('401')) {
+    return 'Email atau password salah.';
+  }
+  if (msg.includes('inactive') || msg.includes('403')) {
+    return 'Akun tidak aktif. Hubungi administrator.';
+  }
+  if (msg.includes('network') || msg.includes('fetch') || msg.includes('Failed to fetch')) {
+    return 'Tidak dapat terhubung ke server. Periksa koneksi dan coba lagi.';
+  }
+  if (msg.includes('500') || msg.includes('502') || msg.includes('503')) {
+    return 'Terjadi kesalahan pada server. Silakan coba lagi.';
+  }
+
+  return msg || 'Terjadi kesalahan. Silakan coba lagi.';
+}
+
 export const Login: React.FC = () => {
   const navigate = useNavigate();
   const { login } = useAuth();
@@ -21,7 +40,7 @@ export const Login: React.FC = () => {
     setError(null);
 
     if (!email || !password) {
-      setError('Please fill in all fields.');
+      setError('Semua field wajib diisi.');
       return;
     }
 
@@ -35,7 +54,7 @@ export const Login: React.FC = () => {
         navigate('/app');
       }
     } catch (err: any) {
-      setError(err.message || 'Login failed. Please try again.');
+      setError(mapLoginError(err));
     } finally {
       setIsSubmitting(false);
     }
@@ -49,7 +68,7 @@ export const Login: React.FC = () => {
             BusinessHub
           </h1>
           <p className="mt-2 text-sm text-slate-600 dark:text-slate-400">
-            Sign in to your account
+            Masuk ke akun Anda
           </p>
         </div>
 
@@ -62,7 +81,7 @@ export const Login: React.FC = () => {
 
           <form onSubmit={handleSubmit} className="space-y-6">
             <Input
-              label="Email Address"
+              label="Email"
               type="email"
               placeholder="you@example.com"
               value={email}
@@ -84,7 +103,7 @@ export const Login: React.FC = () => {
                 className="absolute right-3 top-9 text-xs text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200"
                 onClick={() => setShowPassword(!showPassword)}
               >
-                {showPassword ? 'Hide' : 'Show'}
+                {showPassword ? 'Sembunyikan' : 'Tampilkan'}
               </button>
             </div>
 
@@ -95,19 +114,28 @@ export const Login: React.FC = () => {
               disabled={isSubmitting}
               className="w-full"
             >
-              {isSubmitting ? 'Signing in...' : 'Sign In'}
+              {isSubmitting ? 'Masuk...' : 'Masuk'}
             </Button>
           </form>
 
+          <div className="mt-4 text-center text-sm">
+            <Link
+              to="/forgot-password"
+              className="font-medium text-blue-600 hover:underline dark:text-blue-400"
+            >
+              Lupa password?
+            </Link>
+          </div>
+
           <div className="mt-6 text-center text-sm">
             <span className="text-slate-600 dark:text-slate-400">
-              Don't have an account?{' '}
+              Belum punya akun?{' '}
             </span>
             <Link
               to="/register"
               className="font-medium text-blue-600 hover:underline dark:text-blue-400"
             >
-              Register here
+              Daftar di sini
             </Link>
           </div>
         </Card>

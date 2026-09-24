@@ -41,5 +41,10 @@ class Settings(BaseSettings):
     upload_dir: str = "uploads"
     max_upload_size_mb: int = 5
 
+    resend_api_key: str = ""
+    email_from: str = "noreply@businesshub.dev"
+    frontend_url: str = "http://localhost:5173"
+    reset_token_expire_minutes: int = 60
+
 
 settings = Settings()

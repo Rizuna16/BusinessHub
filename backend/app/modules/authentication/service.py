@@ -80,6 +80,99 @@ class AuthenticationService:
             return None
         return UserResponse.model_validate(user)
 
+    async def forgot_password(self, email: str, ip_address: str = "", audit_logger: Any = None) -> None:
+        """Public forgot-password. Always returns generic response. Never reveals user existence."""
+        from app.core.email import get_email_provider, build_password_reset_email
+        from app.core.config import settings
+
+        user = await self.repository.get_by_email(email)
+
+        if user:
+            await self.repository.invalidate_user_tokens(user.id)
+            raw_token = await self.repository.create_reset_token(user.id)
+            reset_url = f"{settings.frontend_url.rstrip('/')}/reset-password?token={raw_token}"
+            subject, html_body, text_body = build_password_reset_email(
+                reset_url=reset_url,
+                expires_minutes=settings.reset_token_expire_minutes,
+            )
+            provider = get_email_provider()
+            await provider.send_email(
+                to_email=user.email,
+                subject=subject,
+                html_body=html_body,
+                text_body=text_body,
+            )
+
+            if audit_logger is not None:
+                try:
+                    await audit_logger(
+                        action="PASSWORD_RESET_REQUESTED",
+                        target_type="USER",
+                        target_id=user.id,
+                        before_state=None,
+                        after_state=None,
+                        result="SUCCESS",
+                    )
+                except Exception:
+                    pass
+
+    async def reset_password(self, token: str, new_password: str, password_confirmation: str, audit_logger: Any = None) -> None:
+        """Public reset-password using token."""
+        if new_password != password_confirmation:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Konfirmasi password tidak cocok."
+            )
+        if len(new_password) < 8:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Password harus minimal 8 karakter."
+            )
+
+        import hashlib
+        token_hash = hashlib.sha256(token.encode()).hexdigest()
+        token_record = await self.repository.get_reset_token(token_hash)
+        if not token_record:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Token tidak valid atau sudah kedaluwarsa."
+            )
+
+        if self.session is not None:
+            if self.session.in_transaction():
+                await self._consume_and_update(token_hash, token_record["user_id"], new_password, audit_logger)
+            else:
+                async with self.session.begin():
+                    await self._consume_and_update(token_hash, token_record["user_id"], new_password, audit_logger)
+        else:
+            await self._consume_and_update(token_hash, token_record["user_id"], new_password, audit_logger)
+
+    async def _consume_and_update(self, token_hash: str, user_id: str, new_password: str, audit_logger: Any = None) -> None:
+        """Atomically consume token and update password."""
+        consumed = await self.repository.consume_reset_token(token_hash)
+        if not consumed:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Token tidak valid atau sudah kedaluwarsa."
+            )
+
+        hashed = self.security.hash_password(new_password)
+        await self.repository.update_password(user_id, hashed)
+        await self.repository.invalidate_user_tokens(user_id)
+
+        if audit_logger is not None:
+            try:
+                await audit_logger(
+                    action="PASSWORD_RESET_COMPLETED",
+                    target_type="USER",
+                    target_id=user_id,
+                    before_state=None,
+                    after_state=None,
+                    result="SUCCESS",
+                )
+            except Exception:
+                pass
+
     async def reset_password_by_admin(
         self,
         target_user_id: str,

@@ -36,6 +36,22 @@ class AbstractUserRepository(ABC):
     async def update_password(self, user_id: str, password_hash: str) -> Optional[UserInDB]:
         pass
 
+    @abstractmethod
+    async def create_reset_token(self, user_id: str) -> str:
+        pass
+
+    @abstractmethod
+    async def get_reset_token(self, token_hash: str) -> Optional[dict]:
+        pass
+
+    @abstractmethod
+    async def consume_reset_token(self, token_hash: str) -> Optional[dict]:
+        pass
+
+    @abstractmethod
+    async def invalidate_user_tokens(self, user_id: str) -> None:
+        pass
+
 
 class InMemoryUserRepository(AbstractUserRepository):
     """Thread-safe / process-safe singleton-like in-memory user store for modular monolith without SQL dependency yet."""
@@ -95,6 +111,18 @@ class InMemoryUserRepository(AbstractUserRepository):
         updated_user = user.model_copy(update={"password_hash": password_hash, "updated_at": datetime.now(timezone.utc)})
         self._users[user_id] = updated_user
         return updated_user
+
+    async def create_reset_token(self, user_id: str) -> str:
+        return str(uuid.uuid4())
+
+    async def get_reset_token(self, token_hash: str) -> Optional[dict]:
+        return None
+
+    async def consume_reset_token(self, token_hash: str) -> Optional[dict]:
+        return None
+
+    async def invalidate_user_tokens(self, user_id: str) -> None:
+        pass
 
     @classmethod
     def clear(cls):

@@ -3,6 +3,8 @@ import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import Home from '@/pages/Home';
 import Login from '@/pages/Login';
 import Register from '@/pages/Register';
+import ForgotPassword from '@/pages/ForgotPassword';
+import ResetPassword from '@/pages/ResetPassword';
 import Dashboard from '@/pages/Dashboard';
 import Account from '@/pages/Account';
 import Businesses from '@/pages/Businesses';
@@ -94,6 +96,8 @@ const RouteConstants = {
   HOME: '/',
   LOGIN: '/login',
   REGISTER: '/register',
+  FORGOT_PASSWORD: '/forgot-password',
+  RESET_PASSWORD: '/reset-password',
   APP: '/app',
   ACCOUNT: '/account',
   BUSINESSES: '/businesses',
@@ -190,6 +194,8 @@ export const AppRoutes: React.FC = () => {
             </PublicOnlyRoute>
           }
         />
+        <Route path={RouteConstants.FORGOT_PASSWORD} element={<ForgotPassword />} />
+        <Route path={RouteConstants.RESET_PASSWORD} element={<ResetPassword />} />
         <Route
           path={RouteConstants.APP}
           element={
