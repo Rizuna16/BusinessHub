@@ -66,6 +66,7 @@ from app.modules.product_variant.repository import (
     product_variant_repository,
 )
 from app.modules.product_variant.schemas import ProductVariantStatus
+from app.modules.accounting.integration import accounting_integration_service as acct_integration
 
 
 class InventoryService:
@@ -381,6 +382,23 @@ class InventoryService:
             delta=payload.quantity,
         )
 
+        adjustment_ref_id = str(movement.id)
+
+        # Accounting Integration: post GL for manual adjustment.
+        # Failure propagates → session auto-rolls back operational mutations.
+        mac = await self.get_current_mac(business_id, payload.product_id, payload.variant_id)
+        adj_value = payload.quantity * mac
+        if adj_value > Decimal("0"):
+            from datetime import datetime, timezone
+            await acct_integration.post_inventory_adjustment(
+                business_id=business_id,
+                user_id=user_id,
+                adjustment_id=adjustment_ref_id,
+                amount=adj_value,
+                adjustment_date=datetime.now(timezone.utc),
+                is_adjustment_in=True,
+            )
+
         return StockMovementResponse(
             **movement.model_dump(),
             lines=[StockMovementLineResponse(**line.model_dump())],
@@ -444,6 +462,23 @@ class InventoryService:
             variant_id=payload.variant_id,
             delta=-payload.quantity,
         )
+
+        adjustment_ref_id = str(movement.id)
+
+        # Accounting Integration: post GL for manual adjustment.
+        # Failure propagates → session auto-rolls back operational mutations.
+        mac = await self.get_current_mac(business_id, payload.product_id, payload.variant_id)
+        adj_value = payload.quantity * mac
+        if adj_value > Decimal("0"):
+            from datetime import datetime, timezone
+            await acct_integration.post_inventory_adjustment(
+                business_id=business_id,
+                user_id=user_id,
+                adjustment_id=adjustment_ref_id,
+                amount=adj_value,
+                adjustment_date=datetime.now(timezone.utc),
+                is_adjustment_in=False,
+            )
 
         return StockMovementResponse(
             **movement.model_dump(),

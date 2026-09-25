@@ -31,6 +31,7 @@ from app.modules.business_membership.service import (
 )
 from app.modules.business_membership.schemas import BusinessMembershipRole
 from app.modules.cashier_shift.service import cashier_shift_service
+from app.modules.accounting.integration import accounting_integration_service as acct_integration
 
 
 class CashAccountService:
@@ -319,7 +320,7 @@ class CashAccountService:
             )
 
         import uuid
-        transfer_ref_id = str(uuid.uuid4())
+        transfer_ref_id = payload.idempotency_key or str(uuid.uuid4())
 
         # Resolve shift context for each side independently
         source_shift_id = None
@@ -358,6 +359,17 @@ class CashAccountService:
             reference_id=transfer_ref_id,
             description=payload.description or f"Transfer IN from {source.name}",
             shift_id=dest_shift_id,
+        )
+
+        # Accounting Integration: post double-entry journal for the transfer.
+        # Failure propagates → session auto-rolls back all operational mutations.
+        from datetime import datetime, timezone
+        await acct_integration.post_cash_transfer(
+            business_id=business_id,
+            user_id=user_id,
+            transfer_id=transfer_ref_id,
+            amount=payload.amount,
+            transfer_date=datetime.now(timezone.utc),
         )
 
         return [CashMovementResponse(**m_out.model_dump()), CashMovementResponse(**m_in.model_dump())]

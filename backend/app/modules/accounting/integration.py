@@ -38,6 +38,7 @@ ACCOUNT_ACCOUNTS_PAYABLE = "2100"
 ACCOUNT_OUTPUT_VAT = "2200"
 ACCOUNT_STORE_CREDIT_LIABILITY = "2300"
 ACCOUNT_SALES_REVENUE = "4100"
+ACCOUNT_CASH_BANK_TRANSFER = "1100"  # Used for cash transfer journals
 ACCOUNT_GENERAL_EXPENSE = "5100"
 ACCOUNT_COGS = "5200"
 
@@ -525,6 +526,150 @@ class AccountingIntegrationService:
             lines=[
                 (ACCOUNT_GENERAL_EXPENSE, amount, Decimal("0")),
                 (ACCOUNT_CASH_BANK, Decimal("0"), amount),
+            ],
+            branch_id=branch_id,
+        )
+
+    # ============================================================
+    # GAP CLOSURE INTEGRATION: Cash Transfer, Inventory Adjustment,
+    # Stock Opname Variance, Direct Store Credit Issuance
+    # ============================================================
+
+    async def post_cash_transfer(
+        self,
+        business_id: str,
+        user_id: str,
+        transfer_id: str,
+        amount: Decimal,
+        transfer_date: datetime,
+        source_account_code: str = ACCOUNT_CASH_BANK,
+        dest_account_code: str = ACCOUNT_CASH_BANK,
+        branch_id: Optional[str] = None,
+    ) -> Optional[str]:
+        """
+        Journal: Debit Destination Cash/Bank / Credit Source Cash/Bank.
+        Triggered on cash transfer completion.
+        Idempotent: same transfer_id → same journal.
+        """
+        if amount <= Decimal("0"):
+            return None
+
+        return await self._post_journal(
+            business_id=business_id,
+            user_id=user_id,
+            source_type="CASH_TRANSFER",
+            source_id=transfer_id,
+            event="TRANSFERRED",
+            description="Inter-account cash transfer",
+            journal_date=transfer_date,
+            lines=[
+                (dest_account_code, amount, Decimal("0")),
+                (source_account_code, Decimal("0"), amount),
+            ],
+            branch_id=branch_id,
+        )
+
+    async def post_inventory_adjustment(
+        self,
+        business_id: str,
+        user_id: str,
+        adjustment_id: str,
+        amount: Decimal,
+        adjustment_date: datetime,
+        is_adjustment_in: bool = True,
+        branch_id: Optional[str] = None,
+    ) -> Optional[str]:
+        """
+        Journal:
+        - Adjustment IN:  Debit Inventory Assets (1300) / Credit General Expense (5100) or Gain/Loss
+        - Adjustment OUT: Debit General Expense (5100) / Credit Inventory Assets (1300)
+        """
+        if amount <= Decimal("0"):
+            return None
+
+        lines = (
+            [(ACCOUNT_INVENTORY_ASSETS, amount, Decimal("0")), (ACCOUNT_GENERAL_EXPENSE, Decimal("0"), amount)]
+            if is_adjustment_in
+            else [(ACCOUNT_GENERAL_EXPENSE, amount, Decimal("0")), (ACCOUNT_INVENTORY_ASSETS, Decimal("0"), amount)]
+        )
+
+        return await self._post_journal(
+            business_id=business_id,
+            user_id=user_id,
+            source_type="INVENTORY_ADJUSTMENT",
+            source_id=adjustment_id,
+            event="ADJUSTED",
+            description="Inventory stock adjustment",
+            journal_date=adjustment_date,
+            lines=lines,
+            branch_id=branch_id,
+        )
+
+    async def post_stock_opname_variance(
+        self,
+        business_id: str,
+        user_id: str,
+        opname_id: str,
+        variance_value: Decimal,
+        opname_date: datetime,
+        branch_id: Optional[str] = None,
+    ) -> Optional[str]:
+        """
+        Journal:
+        - Positive Variance (surplus): Debit Inventory Assets (1300) / Credit General Expense (5100)
+        - Negative Variance (shrinkage): Debit General Expense (5100) / Credit Inventory Assets (1300)
+        """
+        if variance_value == Decimal("0"):
+            return None
+
+        is_surplus = variance_value > Decimal("0")
+        abs_val = abs(variance_value)
+
+        lines = (
+            [(ACCOUNT_INVENTORY_ASSETS, abs_val, Decimal("0")), (ACCOUNT_GENERAL_EXPENSE, Decimal("0"), abs_val)]
+            if is_surplus
+            else [(ACCOUNT_GENERAL_EXPENSE, abs_val, Decimal("0")), (ACCOUNT_INVENTORY_ASSETS, Decimal("0"), abs_val)]
+        )
+
+        return await self._post_journal(
+            business_id=business_id,
+            user_id=user_id,
+            source_type="STOCK_OPNAME",
+            source_id=opname_id,
+            event="FINALIZED",
+            description="Stock opname variance adjustment",
+            journal_date=opname_date,
+            lines=lines,
+            branch_id=branch_id,
+        )
+
+    async def post_direct_store_credit_issuance(
+        self,
+        business_id: str,
+        user_id: str,
+        issuance_id: str,
+        amount: Decimal,
+        issuance_date: datetime,
+        branch_id: Optional[str] = None,
+    ) -> Optional[str]:
+        """
+        Journal for direct store credit issuance:
+        Debit Marketing/Promotion Expense (5100) / Credit Store Credit Liability (2300)
+        """
+        if amount <= Decimal("0"):
+            return None
+
+        return await self._post_journal(
+            business_id=business_id,
+            user_id=user_id,
+            source_type="STORE_CREDIT_ISSUANCE",
+            source_id=issuance_id,
+            event="ISSUED",
+            description="Direct store credit issuance",
+            journal_date=issuance_date,
+            lines=[
+                (ACCOUNT_GENERAL_EXPENSE, amount, Decimal("0")),
+                (ACCOUNT_STORE_CREDIT_LIABILITY, Decimal("0"), amount),
             ],
             branch_id=branch_id,
         )

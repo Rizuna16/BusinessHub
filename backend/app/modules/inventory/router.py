@@ -24,7 +24,6 @@ from app.modules.inventory.stock_card_service import (
     StockCardService,
     stock_card_service,
 )
-
 router = APIRouter(
     prefix=settings.api_v1_prefix + "/businesses/{business_id}/inventory",
     tags=["Inventory"],
@@ -68,11 +67,13 @@ async def adjust_in(
     Adjust stock upwards (IN) for a product/variant at an inventory location.
     Requires OWNER or ADMIN active membership.
     """
-    return await service.adjust_in(
+    result = await service.adjust_in(
         business_id=business_id,
         user_id=current_user.id,
         payload=payload,
     )
+
+    return result
 
 
 @router.post("/adjustments/out", response_model=StockMovementResponse, status_code=201)
@@ -86,11 +87,13 @@ async def adjust_out(
     Adjust stock downwards (OUT) for a product/variant at an inventory location.
     Requires OWNER or ADMIN active membership. Insufficient stock will fail.
     """
-    return await service.adjust_out(
+    result = await service.adjust_out(
         business_id=business_id,
         user_id=current_user.id,
         payload=payload,
     )
+
+    return result
 
 
 @router.post("/transfers", response_model=List[StockMovementResponse], status_code=201)

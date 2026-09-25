@@ -29,6 +29,7 @@ from app.modules.inventory.schemas import (
 )
 from app.modules.business_membership.schemas import BusinessMembershipRole
 from app.modules.inventory_batch.service import inventory_batch_service
+from app.modules.accounting.integration import accounting_integration_service as acct_integration
 
 
 class StockOpnameService:
@@ -200,6 +201,8 @@ class StockOpnameService:
         self, business_id: str, opname_id: str, user_id: str
     ) -> StockOpnameResponse:
         if self.session is not None:
+            if self.session.in_transaction():
+                return await self._finalize_opname_impl(business_id, opname_id, user_id)
             async with self.session.begin():
                 return await self._finalize_opname_impl(business_id, opname_id, user_id)
         else:
@@ -346,6 +349,25 @@ class StockOpnameService:
                 await inventory_batch_service.validate_batch_aggregate_invariant(
                     business_id, opname.inventory_location_id, line.product_id, line.variant_id,
                 )
+
+            # ── ACCOUNTING INTEGRATION: Stock Opname Variance Journal ──
+            # Calculate total monetary variance across all lines using current MAC
+            total_variance_value = Decimal("0")
+            for line in lines:
+                if line.variance is None or line.variance == Decimal("0"):
+                    continue
+                mac = await self.inv_service.get_current_mac(business_id, line.product_id, line.variant_id)
+                total_variance_value += line.variance * mac
+
+            if total_variance_value != Decimal("0"):
+                await acct_integration.post_stock_opname_variance(
+                    business_id=business_id,
+                    user_id=user_id,
+                    opname_id=opname_id,
+                    variance_value=total_variance_value,
+                    opname_date=datetime.now(timezone.utc),
+                )
+
         except Exception as exc:
             # Revert in-memory repos to pre-finalization state on failure (atomic rollback)
             self.inv_service.balance_repo._balances = balance_snapshot

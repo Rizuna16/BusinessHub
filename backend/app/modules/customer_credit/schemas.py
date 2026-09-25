@@ -13,6 +13,7 @@ class CreditLimitUpdate(BaseModel):
 class StoreCreditAdjust(BaseModel):
     amount: Decimal = Field(..., gt=0)
     reason: Optional[str] = Field(None, max_length=500)
+    idempotency_key: Optional[str] = Field(None, max_length=100)
 
     model_config = ConfigDict(extra="forbid")
 

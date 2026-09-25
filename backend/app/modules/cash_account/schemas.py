@@ -149,6 +149,7 @@ class CashTransferInput(BaseModel):
     destination_account_id: str = Field(..., min_length=1)
     amount: Decimal = Field(..., gt=0)
     description: Optional[str] = Field(None, max_length=1000)
+    idempotency_key: Optional[str] = Field(None, max_length=100)
 
     model_config = ConfigDict(extra="forbid")
 

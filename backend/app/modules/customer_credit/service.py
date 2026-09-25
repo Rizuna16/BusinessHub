@@ -1,3 +1,4 @@
+import uuid
 from typing import Optional
 from decimal import Decimal
 from fastapi import HTTPException, status
@@ -31,6 +32,7 @@ from app.modules.payment.repository import payment_repository
 from app.modules.payment.schemas import PaymentTargetType, PaymentStatus
 from app.modules.sales_return.repository import sales_return_repository
 from app.modules.sales_return.schemas import SalesReturnStatus
+from app.modules.accounting.integration import accounting_integration_service as acct_integration
 
 
 class CustomerCreditService:
@@ -128,6 +130,8 @@ class CustomerCreditService:
         reference_id: Optional[str] = None,
     ) -> CustomerCreditSummaryResponse:
         if self.session is not None:
+            if self.session.in_transaction():
+                return await self._issue_store_credit_impl(business_id, user_id, customer_id, payload, reference_type, reference_id)
             async with self.session.begin():
                 return await self._issue_store_credit_impl(business_id, user_id, customer_id, payload, reference_type, reference_id)
         else:
@@ -179,6 +183,22 @@ class CustomerCreditService:
         updated_customer = await self.customer_repo.get_by_id(customer_id, business_id)
         await self._verify_ledger_reconciliation(customer_id, business_id, updated_customer.store_credit_balance)
 
+        # Accounting Integration: post journal for direct store credit issuance.
+        # Use payload.idempotency_key for stable idempotency, fallback to ledger entry ID.
+        from datetime import datetime as _dt, timezone as _tz
+        ledger_entries = await self.ledger_repo.list_by_customer(
+            customer_id=customer_id, business_id=business_id, page=1, page_size=1,
+        )
+        ledger_entry_id = str(ledger_entries.items[0].id) if ledger_entries.items else str(uuid.uuid4())
+        issuance_id = payload.idempotency_key or ledger_entry_id
+        await acct_integration.post_direct_store_credit_issuance(
+            business_id=business_id,
+            user_id=user_id,
+            issuance_id=issuance_id,
+            amount=payload.amount,
+            issuance_date=_dt.now(_tz.utc),
+        )
+
         return await self._build_summary(business_id, updated)
 
     async def redeem_store_credit(
@@ -191,6 +211,8 @@ class CustomerCreditService:
         reference_id: Optional[str] = None,
     ) -> CustomerCreditSummaryResponse:
         if self.session is not None:
+            if self.session.in_transaction():
+                return await self._redeem_store_credit_impl(business_id, user_id, customer_id, amount, reference_type, reference_id)
             async with self.session.begin():
                 return await self._redeem_store_credit_impl(business_id, user_id, customer_id, amount, reference_type, reference_id)
         else:
